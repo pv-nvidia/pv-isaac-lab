@@ -105,6 +105,7 @@ dependencies = [
     # ----- newton interactive viewer GUI (in base, no extra required) -----
     "imgui-bundle>=1.92.5",
     "typing-extensions>=4.15.0",
+    "py-spy>=0.4.2",
 ]
 
 [project.optional-dependencies]
