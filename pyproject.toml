@@ -3,6 +3,142 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+# ---------------------------------------------------------------------------
+# uv workspace root (local addition, not upstream v2.3.2)
+#
+# Purpose: let `uv sync --extra ...` reach the same end state as
+# `./isaaclab.sh -i`, in one resolution instead of ~10 sequential
+# `pip install` calls.
+#
+# Deliberately NOT a copy of the 3.0 root pyproject: on 2.3.2 the per-extension
+# `source/*/setup.py` files are still the source of truth for dependencies, and
+# uv reads them through [tool.uv.sources] path entries. Only what setup.py
+# cannot express lives here: the Isaac Sim runtime, the CUDA torch index, and
+# the pin overrides that `./isaaclab.sh -i` achieves by "last install wins".
+#
+# `package = false` makes this a virtual root: uv never builds or installs it.
+# ---------------------------------------------------------------------------
+[project]
+name = "isaaclab-dev"
+version = "0.1.0"
+description = "Isaac Lab v2.3.2 source checkout development environment."
+# Isaac Sim 5.1.0 publishes cp311 wheels only (4.x is cp310, 6.x is cp312).
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "isaaclab",
+    "isaaclab-assets",
+    "isaaclab-contrib",
+    "isaaclab-mimic",
+    "isaaclab-rl",
+    "isaaclab-tasks",
+]
+
+[project.optional-dependencies]
+# The Isaac Sim runtime. `./isaaclab.sh -i` never installs this; the docs tell
+# you to `pip install "isaacsim[all,extscache]==5.1.0"` beforehand.
+isaacsim = ["isaacsim[all,extscache]==5.1.0"]
+
+# RL frameworks. These mirror `./isaaclab.sh -i <framework>`, which runs
+# `pip install -e source/isaaclab_rl[<framework>]` — the definitions stay in
+# source/isaaclab_rl/setup.py, these just forward to them.
+sb3 = ["isaaclab-rl[sb3]"]
+skrl = ["isaaclab-rl[skrl]"]
+rsl-rl = ["isaaclab-rl[rsl-rl]"]
+# Pulls rl_games from git plus the legacy `gym` package; opt in explicitly.
+rl-games = ["isaaclab-rl[rl-games]"]
+mimic = ["isaaclab-mimic[robomimic]"]
+
+# pytest/pytest-mock/junitparser/flaky already come in via isaaclab's
+# setup.py install_requires; this extra adds the docs toolchain on top.
+# Note: no `coverage` entry. isaacsim-kernel 5.1.0 pins coverage==7.4.4 exactly,
+# and `./isaaclab.sh -i` installs no coverage at all, so leave it to Isaac Sim.
+test = [
+    "sphinx>=7.0,<9",
+    "sphinx-book-theme>=1.1",
+    "myst-parser",
+    "sphinxcontrib-bibtex==2.5.0",
+    "autodocsumm",
+    "sphinx-copybutton",
+    "sphinx-icon",
+    "sphinx_design",
+    "sphinx-paramlinks",
+    "sphinxemoji",
+    "sphinx-tabs",
+    "sphinx-multiversion==0.2.4",
+]
+
+# Equivalent of `./isaaclab.sh -i` with the default framework_name=all,
+# plus the Isaac Sim runtime the docs install separately.
+all = ["isaaclab-dev[isaacsim,sb3,skrl,rsl-rl,rl-games,mimic]"]
+
+[[tool.uv.index]]
+url = "https://pypi.nvidia.com"
+explicit = false
+
+[[tool.uv.index]]
+name = "pypi-public"
+url = "https://pypi.org/simple"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv]
+package = false
+index-strategy = "unsafe-best-match"
+# This checkout is a Linux x86_64 benchmarking tree. Narrowing the resolution
+# universe keeps uv.lock small and fast; add the aarch64/win32 markers from the
+# 3.0 root pyproject if this ever needs to lock for them (note that
+# ensure_cuda_torch() in isaaclab.sh uses torch 2.9.0/cu130 on aarch64).
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+# `./isaaclab.sh -i` reaches these by running installs in a fixed order and
+# letting the last one win. uv resolves everything at once, so the same
+# outcomes have to be stated as overrides.
+override-dependencies = [
+    # ensure_cuda_torch() runs twice in `-i`, before and after the editable
+    # installs, precisely to stomp whatever torch the setup.py files pulled in.
+    "torch==2.7.0",
+    "torchvision==0.22.0",
+    # isaaclab_rl/setup.py pins packaging<24; isaacsim 5.1's wheels want a
+    # newer one. Both caps are stricter than the code needs.
+    "packaging>=20,<26",
+    # isaaclab/setup.py pins starlette==0.49.1 (livestream), but isaacsim-kernel
+    # 5.1.0 -> fastapi==0.115.7 requires starlette<0.46.0. `./isaaclab.sh -i`
+    # resolves this by accident: the editable isaaclab install runs after
+    # isaacsim and overwrites it, so the working environment has always been
+    # 0.49.1 against fastapi 0.115.7. The override reproduces that end state
+    # rather than silently changing it.
+    "starlette==0.49.1",
+]
+
+# setuptools >=81 stopped vendoring pkg_resources, which these sdist-only,
+# unmaintained deps still import from setup.py. `./isaaclab.sh -i` avoids this by
+# building in an environment that happens to have an old setuptools; uv builds in
+# isolation, so the constraint has to be explicit.
+[tool.uv.extra-build-dependencies]
+flatdict = ["setuptools<81"]
+
+[tool.uv.sources]
+isaaclab = { path = "source/isaaclab", editable = true }
+"isaaclab-assets" = { path = "source/isaaclab_assets", editable = true }
+"isaaclab-contrib" = { path = "source/isaaclab_contrib", editable = true }
+"isaaclab-mimic" = { path = "source/isaaclab_mimic", editable = true }
+"isaaclab-rl" = { path = "source/isaaclab_rl", editable = true }
+"isaaclab-tasks" = { path = "source/isaaclab_tasks", editable = true }
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+# isaaclab/setup.py leaves warp-lang unpinned. `./isaaclab.sh -i` gets it from
+# PyPI (its pip calls never add pypi.nvidia.com), but this file registers
+# pypi.nvidia.com as an implicit index, and with unsafe-best-match that makes
+# uv pick NVIDIA's dated nightly (warp_lang-1.17.0.devYYYYMMDD). Pin the index
+# so a benchmarking tree gets a reproducible stable build.
+warp-lang = { index = "pypi-public" }
+
+[tool.uv.pip]
+index-strategy = "unsafe-best-match"
+
 [tool.ruff]
 line-length = 120
 target-version = "py310"
