@@ -105,6 +105,22 @@ parser.add_argument(
         " renderer threads; if it stays slow, it is a global effect (host all-core frequency)."
     ),
 )
+parser.add_argument(
+    "--samples_out",
+    default="",
+    help=(
+        "Write every recorded call duration to this TSV (metric/call/ms + a self-describing"
+        " header) so render_bench_report.py can chart the distribution and the tail."
+    ),
+)
+parser.add_argument(
+    "--run_meta",
+    default="",
+    help=(
+        "Comma-separated key=value pairs copied verbatim into the --samples_out header"
+        " (run_render_bench.sh passes halt_poll/pass/arm-tag context this way)."
+    ),
+)
 add_launcher_args(parser)
 # Accept the ticket's --enable_cameras/--headless even if this Isaac Lab no longer
 # registers them (kitless renderers are headless; camera scenes auto-enable cameras).
@@ -146,11 +162,13 @@ sys.argv = [sys.argv[0], f"presets={_preset}", *hydra_args]
 # Kitless: do NOT launch AppLauncher. Import the env stack (import-safe without Kit).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import torch  # noqa: E402
 import gymnasium as gym  # noqa: E402
 import render_bench_task  # noqa: F401  registers the gym id  # noqa: E402
+import torch  # noqa: E402
+
 from isaaclab.envs import DirectRLEnv  # noqa: E402
 from isaaclab.scene import InteractiveScene  # noqa: E402
+
 from isaaclab_tasks.utils import resolve_task_config  # noqa: E402
 
 TASK = "Repro-RenderBench-Franka-Cabinet-v0"
@@ -159,6 +177,10 @@ TASK = "Repro-RenderBench-Franka-Cabinet-v0"
 _WRITE_MS: list[float] = []
 _FRAME_MS: list[float] = []
 _RECORD = {"on": False}
+# Wall clock of the measured loop, so a total can be quoted as a SHARE of the
+# frame budget instead of as a bare millisecond sum (which only scales with
+# --num_steps and compares across runs at equal step counts).
+_LOOP_WALL_MS = [0.0]
 
 _orig_write = InteractiveScene.write_data_to_sim
 
@@ -207,7 +229,16 @@ def _sched_snapshot() -> dict:
     metal). Deltas across the measured loop attribute a slow run to scheduling
     pressure instead of leaving it a mystery.
     """
-    snap = {"threads": 0, "nonvol": 0, "vol": 0, "minflt": 0, "majflt": 0, "steal_ticks": 0, "tlb_ipi": 0, "call_ipi": 0}
+    snap = {
+        "threads": 0,
+        "nonvol": 0,
+        "vol": 0,
+        "minflt": 0,
+        "majflt": 0,
+        "steal_ticks": 0,
+        "tlb_ipi": 0,
+        "call_ipi": 0,
+    }
     with open("/proc/self/status") as fh:
         for line in fh:
             if line.startswith("Threads:"):
@@ -279,7 +310,14 @@ def _cupti_subscriber_state() -> str:
     return f"ACTIVE (subscriber slot held, cuptiSubscribe rc={rc}; {path})"
 
 
+# Nearest-rank sample counts below which a quantile is just max_ms. With
+# idx = round(q/100 * (n-1)), p99 separates from max at n=52 and p99.9 at n=502.
+_MIN_CALLS = {"p99": 52, "p999": 502}
+
+
 def _pct(sorted_vals: list[float], q: float) -> float:
+    # Nearest-rank, no interpolation (see _MIN_CALLS). Keep as-is: switching to
+    # an interpolating percentile would move already-quoted p95 numbers.
     if not sorted_vals:
         return float("nan")
     idx = min(len(sorted_vals) - 1, int(round(q / 100.0 * (len(sorted_vals) - 1))))
@@ -291,13 +329,64 @@ def _report(metric: str, vals: list[float]) -> None:
     if not v:
         print(f"[render-bench] {metric}: no samples", flush=True)
         return
+    # total_ms/share_pct come last so run_render_bench.sh can bolt on new fields
+    # without disturbing the median..p999 sed capture that the report table parses.
+    total = sum(v)
+    wall = _LOOP_WALL_MS[0]
+    # Share OF THE MEASURED LOOP: meaningful for a per-substep call like
+    # write_data_to_sim, trivially ~100% for full_frame (which is the loop).
+    share = (100.0 * total / wall) if wall > 0 else float("nan")
     print(
         f"RESULT metric={metric} renderer={args_cli.renderer} "
         f"ovrtx_source={os.environ.get('OVRTX_SOURCE', 'wheel')} num_envs={args_cli.num_envs} "
         f"calls={len(v)} median_ms={statistics.median(v):.4f} mean_ms={statistics.fmean(v):.4f} "
-        f"p95_ms={_pct(v, 95):.4f} min_ms={v[0]:.4f} max_ms={v[-1]:.4f}",
+        f"p95_ms={_pct(v, 95):.4f} p99_ms={_pct(v, 99):.4f} p999_ms={_pct(v, 99.9):.4f} "
+        f"min_ms={v[0]:.4f} max_ms={v[-1]:.4f} "
+        f"total_ms={total:.2f} loop_wall_ms={wall:.2f} loop_share_pct={share:.2f}",
         flush=True,
     )
+    # The sample count is calls, not steps: a step records one write per physics
+    # substep, so only the runner knows whether the tail quantiles are real.
+    thin = [name for name, need in _MIN_CALLS.items() if len(v) < need]
+    if thin:
+        print(
+            f"PT_MARK WARNING: {metric}: {'/'.join(thin)} == max_ms with calls={len(v)}"
+            f" (nearest-rank needs >= {_MIN_CALLS['p99']} calls for p99,"
+            f" >= {_MIN_CALLS['p999']} for p999) — raise --num_steps to read the tail",
+            flush=True,
+        )
+
+
+def _write_samples(path: str) -> None:
+    """Dump every recorded call duration, with enough header to chart it later.
+
+    One TSV row per call (``metric``/``call``/``ms``) plus a ``#`` header carrying
+    the run's identity, so ``render_bench_report.py`` never has to re-derive
+    renderer/env-count/halt-poll from a file name.
+    """
+    meta = {
+        "renderer": args_cli.renderer,
+        "ovrtx_source": os.environ.get("OVRTX_SOURCE", "wheel"),
+        "num_envs": args_cli.num_envs,
+        "num_steps": args_cli.num_steps,
+        "warmup": args_cli.warmup,
+        "no_cupti": int(args_cli.no_cupti),
+        "pin_sim": int(args_cli.pin_sim),
+        "wall_ms": f"{_LOOP_WALL_MS[0]:.2f}",
+    }
+    for pair in args_cli.run_meta.split(","):
+        key, _, val = pair.partition("=")
+        if key.strip():
+            meta[key.strip()] = val.strip()
+    os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+    with open(path, "w") as fh:
+        fh.write("# render-bench samples v1\n")
+        fh.write("# " + " ".join(f"{k}={v}" for k, v in meta.items()) + "\n")
+        fh.write("metric\tcall\tms\n")
+        for metric, vals in (("write_data_to_sim", _WRITE_MS), ("full_frame", _FRAME_MS)):
+            for i, ms in enumerate(vals):
+                fh.write(f"{metric}\t{i}\t{ms:.6f}\n")
+    print(f"PT_MARK samples: {len(_WRITE_MS)} write + {len(_FRAME_MS)} frame calls -> {path}", flush=True)
 
 
 def main(env_cfg) -> None:
@@ -354,6 +443,7 @@ def main(env_cfg) -> None:
         # Opens the nsys --capture-range=cudaProfilerApi window: warmup (RT pipeline
         # build, module loads) stays out of the report; no-op without a profiler.
         torch.cuda.profiler.start()
+    _loop_t0 = time.perf_counter()
     for i in range(args_cli.num_steps):
         if args_cli.step_sleep > 0.0:
             time.sleep(args_cli.step_sleep)  # outside the timed writes; lets GPU/background work drain
@@ -362,6 +452,7 @@ def main(env_cfg) -> None:
         _one()
         if args_cli.profile:
             torch.cuda.nvtx.range_pop()
+    _LOOP_WALL_MS[0] = (time.perf_counter() - _loop_t0) * 1e3
     if args_cli.profile:
         torch.cuda.profiler.stop()
     _RECORD["on"] = False
@@ -392,6 +483,8 @@ def main(env_cfg) -> None:
     if args_cli.full:
         _report("full_frame", _FRAME_MS)
     print("=" * 78, flush=True)
+    if args_cli.samples_out:
+        _write_samples(args_cli.samples_out)
 
 
 if __name__ == "__main__":
