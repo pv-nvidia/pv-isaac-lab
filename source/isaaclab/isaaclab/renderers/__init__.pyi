@@ -12,7 +12,9 @@ __all__ = [
     "RendererCfg",
     "RenderContext",
     "async_rendering_enabled_from_env",
+    "async_rendering_frames_from_env",
     "resolve_async_rendering_enabled",
+    "resolve_async_rendering_frames",
     "warn_unsupported_async_rendering",
 ]
 
@@ -23,7 +25,9 @@ from .renderer_cfg import (
     ASYNC_RENDERING_ENV_VAR,
     RendererCfg,
     async_rendering_enabled_from_env,
+    async_rendering_frames_from_env,
     resolve_async_rendering_enabled,
+    resolve_async_rendering_frames,
     warn_unsupported_async_rendering,
 )
 from .render_context import RenderContext

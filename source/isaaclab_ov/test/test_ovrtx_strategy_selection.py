@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 
 import pytest
 
@@ -43,60 +44,88 @@ def sync_cfg(monkeypatch) -> OVRTXRendererCfg:
 
 
 def test_async_selected_when_enabled(async_cfg):
-    assert isinstance(_resolve_render_strategy(async_cfg), _AsyncRenderStrategy)
+    assert isinstance(_resolve_render_strategy(async_cfg, use_ovstage=False), _AsyncRenderStrategy)
 
 
 def test_sync_selected_when_disabled(sync_cfg):
-    assert isinstance(_resolve_render_strategy(sync_cfg), _SyncRenderStrategy)
+    assert isinstance(_resolve_render_strategy(sync_cfg, use_ovstage=False), _SyncRenderStrategy)
 
 
 def test_env_override_enables_async(sync_cfg, monkeypatch):
     monkeypatch.setenv(ASYNC_RENDERING_ENV_VAR, "1")
 
-    assert isinstance(_resolve_render_strategy(sync_cfg), _AsyncRenderStrategy)
+    assert isinstance(_resolve_render_strategy(sync_cfg, use_ovstage=False), _AsyncRenderStrategy)
 
 
 def test_env_override_disables_async(async_cfg, monkeypatch):
     monkeypatch.setenv(ASYNC_RENDERING_ENV_VAR, "0")
 
-    assert isinstance(_resolve_render_strategy(async_cfg), _SyncRenderStrategy)
+    assert isinstance(_resolve_render_strategy(async_cfg, use_ovstage=False), _SyncRenderStrategy)
 
 
-def test_async_pipelines_exactly_one_frame(async_cfg):
-    """One frame of latency: the queue holds that render plus the one being enqueued.
-
-    Deeper queues are deliberately unsupported — the ovstage path cannot sustain them because its
-    scene writes drain in-flight renders, and the legacy path has not measured a benefit.
-    """
-    strategy = _resolve_render_strategy(async_cfg)
-
-    assert isinstance(strategy, _AsyncRenderStrategy)
-    assert strategy._render_queue_depth == 2
-
-
-def test_multi_frame_latency_is_rejected(monkeypatch):
-    """Frame counts above one are refused explicitly rather than silently truncated."""
+def test_zero_frames_selects_sync(monkeypatch):
     monkeypatch.delenv(ASYNC_RENDERING_ENV_VAR, raising=False)
 
-    with pytest.raises(ValueError, match="not supported yet"):
-        _resolve_render_strategy(OVRTXRendererCfg(async_rendering=3))
+    assert isinstance(
+        _resolve_render_strategy(OVRTXRendererCfg(async_rendering=0), use_ovstage=False), _SyncRenderStrategy
+    )
 
 
-def test_multi_frame_env_override_is_ignored(async_cfg, monkeypatch):
-    """A frame count in the env var is not a boolean spelling, so it is ignored with a warning."""
+@pytest.mark.parametrize("frames", [1, 2, 5])
+def test_frame_count_sets_queue_depth(frames, monkeypatch):
+    """A frame count is latency, so the queue holds one more render than that."""
+    monkeypatch.delenv(ASYNC_RENDERING_ENV_VAR, raising=False)
+
+    strategy = _resolve_render_strategy(OVRTXRendererCfg(async_rendering=frames), use_ovstage=False)
+
+    assert isinstance(strategy, _AsyncRenderStrategy)
+    assert strategy._render_queue_depth == frames + 1
+
+
+def test_bool_matches_one_frame(monkeypatch):
+    """``True`` is the same request as ``1``."""
+    monkeypatch.delenv(ASYNC_RENDERING_ENV_VAR, raising=False)
+
+    assert (
+        _resolve_render_strategy(OVRTXRendererCfg(async_rendering=True), use_ovstage=False)._render_queue_depth
+        == _resolve_render_strategy(OVRTXRendererCfg(async_rendering=1), use_ovstage=False)._render_queue_depth
+    )
+
+
+def test_env_override_sets_frame_count(sync_cfg, monkeypatch):
     monkeypatch.setenv(ASYNC_RENDERING_ENV_VAR, "3")
 
-    assert isinstance(_resolve_render_strategy(async_cfg), _AsyncRenderStrategy)
+    assert _resolve_render_strategy(sync_cfg, use_ovstage=False)._render_queue_depth == 4
 
 
 def test_invalid_env_override_falls_back_to_cfg(async_cfg, monkeypatch):
     monkeypatch.setenv(ASYNC_RENDERING_ENV_VAR, "banana")
 
-    assert isinstance(_resolve_render_strategy(async_cfg), _AsyncRenderStrategy)
+    assert isinstance(_resolve_render_strategy(async_cfg, use_ovstage=False), _AsyncRenderStrategy)
 
 
-def test_negative_value_is_rejected(monkeypatch):
+def test_negative_frame_count_is_rejected(monkeypatch):
     monkeypatch.delenv(ASYNC_RENDERING_ENV_VAR, raising=False)
 
     with pytest.raises(ValueError):
-        _resolve_render_strategy(OVRTXRendererCfg(async_rendering=-1))
+        _resolve_render_strategy(OVRTXRendererCfg(async_rendering=-1), use_ovstage=False)
+
+
+def test_resolver_clamps_latency_to_one_on_the_ovstage_path(caplog):
+    """ovstage drains in-flight renders before each frame's scene writes, so deeper queues cannot
+    overlap anything; the resolver clamps them to one frame and says so."""
+    with caplog.at_level(logging.WARNING):
+        strategy = _resolve_render_strategy(OVRTXRendererCfg(async_rendering=3), use_ovstage=True)
+
+    assert isinstance(strategy, _AsyncRenderStrategy)
+    assert strategy._render_queue_depth == 2  # latency 1 + the frame being enqueued
+    assert any("sustains at most 1" in record.getMessage() for record in caplog.records)
+
+
+def test_resolver_keeps_requested_latency_on_the_legacy_path(caplog):
+    """The legacy path has no per-frame scene-write drain, so the requested depth stands."""
+    with caplog.at_level(logging.WARNING):
+        strategy = _resolve_render_strategy(OVRTXRendererCfg(async_rendering=3), use_ovstage=False)
+
+    assert strategy._render_queue_depth == 4
+    assert not caplog.records

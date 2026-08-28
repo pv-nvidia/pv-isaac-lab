@@ -122,7 +122,7 @@ def _renderer(*, use_ovstage: bool = False):
     renderer._renderer = _NativeRecorder(events)
     renderer._visual_material_writer_ref = None
     renderer.cfg = OVRTXRendererCfg()
-    renderer._strategy = ovrtx_renderer_module._resolve_render_strategy(renderer.cfg)
+    renderer._strategy = ovrtx_renderer_module._resolve_render_strategy(renderer.cfg, use_ovstage=False)
     renderer._strategy.set_device("cuda:0")
     if use_ovstage:
         renderer._stage = _OvstageRecorder(events)

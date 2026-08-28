@@ -183,18 +183,26 @@ def ovrtx_use_ovstage_enabled() -> bool:
     return value == "1"
 
 
-def _resolve_render_strategy(cfg: OVRTXRendererCfg) -> _RenderStrategy:
+def _resolve_render_strategy(cfg: OVRTXRendererCfg, use_ovstage: bool) -> _RenderStrategy:
     """Return the asynchronous strategy when ``cfg`` enables it, else the synchronous one.
 
-    Both scene-ownership paths pipeline exactly one frame deep. One frame is also the most the
-    ovstage path could ever sustain: ovstage retains "the latest committed snapshot only" and the
-    default ``OVRTX_ATTACH_MODE_BORROW`` attach reads it in place ("rendering may observe that
-    publication or a later one"), so every frame's first scene write must drain the render still in
-    flight (see :meth:`OVRTXRenderer._write_attribute_ovstage`) — a concurrent write could both
-    tear the in-flight frame and bleed newer state into it. Deeper queues on the legacy path, or on
-    ovstage once it retains per-ordinal payload history, are future work.
+    Both scene-ownership paths support asynchronous rendering, but the ovstage path drains every
+    in-flight render before each frame's first scene write (see
+    :meth:`OVRTXRenderer._write_attribute_ovstage`), so it can sustain at most one frame of camera
+    latency. Deeper queues are clamped there with a warning rather than silently holding renders
+    that can never overlap.
+
+    The drain (and therefore the cap) is required by two documented ovstage/ovrtx facts, not an
+    integration choice: ovstage 0.1 "retains the latest committed snapshot only; an ordinal passed
+    to rendering is a publication gate, not a historical snapshot selector", and the default
+    ``OVRTX_ATTACH_MODE_BORROW`` attach makes the renderer read that single snapshot in place —
+    "rendering may observe that publication or a later one". A concurrent write therefore both can
+    tear an in-flight frame and can bleed newer state into it. Deeper queues become possible only
+    with multi-snapshot retention in ovstage (its API already reserves the retained-history
+    surface) or a replicate-mode attach that copies at update time.
     """
-    return _AsyncRenderStrategy.try_create(cfg) or _SyncRenderStrategy()
+    max_latency_frames = 1 if use_ovstage else None
+    return _AsyncRenderStrategy.try_create(cfg, max_latency_frames=max_latency_frames) or _SyncRenderStrategy()
 
 
 def _raise_missing_ppisp_error(exc: ModuleNotFoundError) -> NoReturn:
@@ -380,7 +388,7 @@ class OVRTXRenderer(BaseRenderer):
         # Selected once at construction so every dispatch method below sees a stable path for the
         # lifetime of the renderer, even if the environment variable changes mid-process.
         self._use_ovstage = ovrtx_use_ovstage_enabled()
-        self._strategy: _RenderStrategy = _resolve_render_strategy(cfg)
+        self._strategy: _RenderStrategy = _resolve_render_strategy(cfg, self._use_ovstage)
         self._init_fields()
 
         logger.info("Creating OVRTX renderer...")
