@@ -72,6 +72,22 @@ def setup_scene(request):
     # Note: cleanup is handled by build_simulation_context's finally block
 
 
+def test_close_releases_extra_frame_views():
+    """Scene cleanup closes extra frame views exactly once."""
+    scene = object.__new__(InteractiveScene)
+    closed: list[str] = []
+    scene._extras = {
+        "first": SimpleNamespace(close=lambda: closed.append("first")),
+        "second": SimpleNamespace(close=lambda: closed.append("second")),
+    }
+
+    scene.close()
+    scene.close()
+
+    assert closed == ["first", "second"]
+    assert scene._extras == {}
+
+
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_relative_flag(device, setup_scene):
     make_scene, sim = setup_scene
