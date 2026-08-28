@@ -566,6 +566,7 @@ class DirectRLEnv(gym.Env):
             # note: this is order-sensitive to avoid any dangling references
             if self.cfg.events:
                 del self.event_manager
+            self.scene.close()
             del self.scene
             if self.viewport_camera_controller is not None:
                 del self.viewport_camera_controller

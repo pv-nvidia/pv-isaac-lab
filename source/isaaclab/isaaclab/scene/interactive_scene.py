@@ -587,6 +587,12 @@ class InteractiveScene:
     Operations.
     """
 
+    def close(self) -> None:
+        """Release persistent state owned by the scene."""
+        for frame_view in self._extras.values():
+            frame_view.close()
+        self._extras.clear()
+
     def reset(self, env_ids: Sequence[int] | None = None):
         """Resets the scene entities.
 

@@ -442,6 +442,7 @@ class LeappDeploymentEnv:
                 del self.command_manager
             if self.event_manager is not None:
                 del self.event_manager
+            self.scene.close()
             del self.scene
             if self.viewport_camera_controller is not None:
                 del self.viewport_camera_controller
