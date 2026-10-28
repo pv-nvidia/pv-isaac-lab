@@ -431,7 +431,7 @@ class image_rgb(CameraImageBase):
             per-channel mean.
         channel_first: Whether to return ``(num_envs, C, H, W)``. Defaults to False.
         frame_stack: Number of recent frames to stack along the channel axis. Defaults to 1.
-        blank_first_frame: Whether to replace the first frame after a reset with zeros. Defaults to False.
+        blank_first_frame: Whether to give the first frame after a reset zero pixels. Defaults to False.
         out: Optional contiguous destination with the output shape, dtype and device. Defaults to None,
             which allocates a new result. The observation manager supplies a fresh destination automatically.
             Normalized uint8 frames, including stacked frames, are written directly; other inputs are copied.
@@ -485,7 +485,7 @@ class image_depth(CameraImageBase):
         tanh_scale: Map depth to ``tanh(depth / tanh_scale) - 0.5`` [m]. Defaults to None.
         channel_first: Whether to return ``(num_envs, C, H, W)``. Defaults to False.
         frame_stack: Number of recent frames to stack along the channel axis. Defaults to 1.
-        blank_first_frame: Whether to replace the first frame after a reset with zeros. Defaults to False.
+        blank_first_frame: Whether to give the first frame after a reset zero pixels. Defaults to False.
 
     Returns:
         The depth image, metric [m] unless rescaled. Shape is ``(num_envs, H, W, frame_stack)``,
@@ -530,7 +530,7 @@ class image_normals(CameraImageBase):
         normalize: Whether to normalize the image. Defaults to True.
         channel_first: Whether to return ``(num_envs, C, H, W)``. Defaults to False.
         frame_stack: Number of recent frames to stack along the channel axis. Defaults to 1.
-        blank_first_frame: Whether to replace the first frame after a reset with zeros. Defaults to False.
+        blank_first_frame: Whether to give the first frame after a reset zero pixels. Defaults to False.
         data_type: The surface-normal camera data type. Defaults to "normals".
 
     Returns:
@@ -568,7 +568,7 @@ class image_segmentation(CameraImageBase):
         normalize: Whether to normalize the image. Defaults to True.
         channel_first: Whether to return ``(num_envs, C, H, W)``. Defaults to False.
         frame_stack: Number of recent frames to stack along the channel axis. Defaults to 1.
-        blank_first_frame: Whether to replace the first frame after a reset with zeros. Defaults to False.
+        blank_first_frame: Whether to give the first frame after a reset zero pixels. Defaults to False.
 
     Returns:
         The segmentation image. Shape is ``(num_envs, H, W, C * frame_stack)``, or channel-first.

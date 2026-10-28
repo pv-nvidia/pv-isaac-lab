@@ -30,6 +30,7 @@ from isaaclab.envs.mdp.observations import (
     stacked_image,
 )
 from isaaclab.managers import ObservationGroupCfg, ObservationManager, ObservationTermCfg, SceneEntityCfg
+from isaaclab.utils.images import CameraFrameStack
 from isaaclab.utils.warp import ProxyArray
 
 NUM_ENVS = 4
@@ -115,6 +116,11 @@ class TestFrameStacking:
         channels = out.shape[-1] // 2
         assert torch.all(out[0, ..., :channels] == 0)
         assert torch.all(out[0, ..., channels:] == 9)
+
+    def test_blank_first_frame_rejects_rows_that_are_not_environments(self):
+        frames = CameraFrameStack(NUM_ENVS, "cpu", blank_first_frame=True)
+        with pytest.raises(ValueError, match="one camera row per environment"):
+            frames(torch.zeros((2 * NUM_ENVS, HEIGHT, WIDTH, CHANNELS), dtype=torch.uint8))
 
     def test_invalid_frame_stack_raises(self):
         with pytest.raises(ValueError, match="frame_stack must be >= 1"):

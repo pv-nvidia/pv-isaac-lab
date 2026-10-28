@@ -398,9 +398,11 @@ metadata, even when they share a native render submission.
 An environment reset keeps the pipeline. One capture renders every environment tile, so a fresh
 image for the reset environments would make all environments wait. Instead, the first observation of a
 new episode shows the tile from the end of the previous episode. Set ``blank_first_frame=True`` on the
-image observation terms, such as :class:`~isaaclab.envs.mdp.observations.image_rgb`, to replace this
-frame with zeros. The policy then sees the same "no image yet" frame with every renderer, and a real
-camera can give the same frame at start-up.
+image observation terms, such as :class:`~isaaclab.envs.mdp.observations.image_rgb`, to give this frame
+zero pixels before normalization. With this option, the policy sees the same "no image yet" frame with
+every renderer, and a real camera can give the same frame at start-up. A camera with an
+``update_period`` longer than the environment step can still show the previous episode until its next
+capture.
 
 Live fields such as ``camera.data.pos_w`` and ``camera.data.intrinsic_matrices`` remain current.
 Use the capture metadata when pairing delayed pixels with a pose or calibration, for example

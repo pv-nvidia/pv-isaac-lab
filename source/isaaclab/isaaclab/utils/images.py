@@ -253,8 +253,8 @@ class CameraFrameStack:
 
     The returned tensor never aliases the camera or ring buffer, so it outlives the next step.
 
-    With ``blank_first_frame``, the first frame after a reset is replaced with zeros before stacking.
-    A delayed renderer can still show the previous episode in that frame.
+    With ``blank_first_frame``, the first frame after a reset gets zero pixels before normalization and
+    stacking. A delayed renderer can still show the previous episode in that frame.
     """
 
     def __init__(
@@ -273,8 +273,8 @@ class CameraFrameStack:
             frame_stack: Number of frames to stack along the channel axis. Defaults to 1.
             channel_first: Whether to return ``(B, C, H, W)`` instead of ``(B, H, W, C)``.
                 Defaults to False.
-            blank_first_frame: Whether to replace the first frame after a reset with zeros.
-                Defaults to False.
+            blank_first_frame: Whether to give the first frame after a reset zero pixels. Requires one
+                camera row per environment. Defaults to False.
 
         Raises:
             ValueError: If ``frame_stack`` is less than 1.
@@ -313,6 +313,11 @@ class CameraFrameStack:
             The observation. Shape is ``(B, H, W, K * C)`` or ``(B, K * C, H, W)`` for ``K`` stacked frames.
         """
         if self._blank is not None:
+            if images.shape[0] != self._blank.shape[0]:
+                raise ValueError(
+                    f"blank_first_frame needs one camera row per environment ({self._blank.shape[0]}), got"
+                    f" {images.shape[0]}."
+                )
             images = images.masked_fill(self._blank.view(-1, 1, 1, 1), 0)
             self._blank.zero_()
         if self._buffer is None:
