@@ -252,9 +252,19 @@ class CameraFrameStack:
     requires the normalizer to treat channels independently, as :func:`normalize_rgb` does.
 
     The returned tensor never aliases the camera or ring buffer, so it outlives the next step.
+
+    With ``blank_first_frame``, the first frame after a reset is replaced with zeros before stacking.
+    A delayed renderer can still show the previous episode in that frame.
     """
 
-    def __init__(self, num_envs: int, device: str, frame_stack: int = 1, channel_first: bool = False):
+    def __init__(
+        self,
+        num_envs: int,
+        device: str,
+        frame_stack: int = 1,
+        channel_first: bool = False,
+        blank_first_frame: bool = False,
+    ):
         """Initialize the frame stack.
 
         Args:
@@ -262,6 +272,8 @@ class CameraFrameStack:
             device: Device of the ring buffer.
             frame_stack: Number of frames to stack along the channel axis. Defaults to 1.
             channel_first: Whether to return ``(B, C, H, W)`` instead of ``(B, H, W, C)``.
+                Defaults to False.
+            blank_first_frame: Whether to replace the first frame after a reset with zeros.
                 Defaults to False.
 
         Raises:
@@ -275,6 +287,7 @@ class CameraFrameStack:
             self._buffer = CircularBuffer(
                 max_len=frame_stack, batch_size=num_envs, device=device, stack_dim=self._channel_dim
             )
+        self._blank = torch.zeros(num_envs, dtype=torch.bool, device=device) if blank_first_frame else None
 
     def reset(self, env_ids: Sequence[int] | torch.Tensor | None = None):
         """Clear the frame history of the given environments.
@@ -284,6 +297,8 @@ class CameraFrameStack:
         """
         if self._buffer is not None:
             self._buffer.reset(env_ids)
+        if self._blank is not None:
+            self._blank[slice(None) if env_ids is None else env_ids] = True
 
     def __call__(self, images: torch.Tensor, normalize: Callable[..., torch.Tensor] | None = None) -> torch.Tensor:
         """Process the latest camera frame.
@@ -297,6 +312,9 @@ class CameraFrameStack:
         Returns:
             The observation. Shape is ``(B, H, W, K * C)`` or ``(B, K * C, H, W)`` for ``K`` stacked frames.
         """
+        if self._blank is not None:
+            images = images.masked_fill(self._blank.view(-1, 1, 1, 1), 0)
+            self._blank.zero_()
         if self._buffer is None:
             if normalize is None:
                 return images.movedim(-1, self._channel_dim).clone(memory_format=torch.contiguous_format)

@@ -233,9 +233,8 @@ class BaseRenderer(ABC):
     def reset(self, render_data: Any, env_ids: Sequence[int] | None = None) -> None:
         """Reset the renderer-owned state of a camera when its environments reset.
 
-        A renderer implementation drops whatever per-camera state must not survive a reset.
-        Examples are pending asynchronous observations and accumulated temporal render history.
-        The default does nothing.
+        A renderer implementation drops whatever per-camera state must not survive a reset, such as
+        accumulated temporal render history. The default does nothing.
 
         Args:
             render_data: The render data object from :meth:`create_render_data`.
