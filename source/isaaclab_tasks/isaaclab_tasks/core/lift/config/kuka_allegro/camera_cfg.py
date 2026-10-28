@@ -260,6 +260,14 @@ class SingleCameraObservationsCfg(StateObservationCfg):
     # memory than the state groups' history and the state groups already carry the temporal signal
     base_image: BaseImageObsCfg = BaseImageObsCfg()
 
+    @configclass
+    class ImageValidObsCfg(ObsGroup):
+        """Whether the camera image is valid (0 in the first frame after a reset)."""
+
+        image_valid = ObsTerm(func=base_mdp.image_valid)
+
+    image_valid: ImageValidObsCfg = ImageValidObsCfg()
+
 
 @configclass
 class DuoCameraObservationsCfg(SingleCameraObservationsCfg):
