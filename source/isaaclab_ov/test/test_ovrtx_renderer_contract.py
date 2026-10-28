@@ -520,7 +520,8 @@ def test_ovrtx_multiple_cameras_render_independent_views(monkeypatch, use_ovstag
             cameras.append((rd, data))
             # Register the next camera after rendering has already started.
             renderer.update_geometries()
-            renderer.render(rd)
+            for _ in range(2 if asynchronous else 1):
+                renderer.render(rd)
             renderer.read_output(rd, data)
             check_depth(rd, data, 5.0 - index - 0.5)
             if index == 1:
@@ -559,10 +560,6 @@ def test_ovrtx_multiple_cameras_render_independent_views(monkeypatch, use_ovstag
                     wp.synchronize_stream()
                 check_depth(*cameras[1], 5.5)
             check_depth(*cameras[0], 7.5)
-            renderer.reset(cameras[0][0])
-            renderer.render(cameras[0][0])
-            renderer.read_output(*cameras[0])
-            check_depth(*cameras[0], 8.5)
             for height in (1.0, 2.0, 3.0):
                 with wp.ScopedStream(wp.Stream("cuda:0")):
                     for (source, _), vertices in zip(batches, initial_points, strict=True):
@@ -578,7 +575,7 @@ def test_ovrtx_multiple_cameras_render_independent_views(monkeypatch, use_ovstag
                     wp.synchronize_stream()
                 check_depth(*cameras[0], 8.5 - (height - 1))
                 check_depth(*cameras[1], 5.5 - (height - 1))
-            # A partial reset keeps the pipeline: the next image is the capture from before the reset.
+            # Reset keeps the pipeline: the next image is the capture from before the reset.
             renderer.reset(cameras[1][0], [0])
             for (source, _), vertices in zip(batches, initial_points, strict=True):
                 source.points.assign(vertices + (0, 0, 4.0))
@@ -587,11 +584,6 @@ def test_ovrtx_multiple_cameras_render_independent_views(monkeypatch, use_ovstag
             renderer.render(cameras[1][0])
             renderer.read_output(*cameras[1])
             check_depth(*cameras[1], 2.5)
-            # A full reset primes a fresh image.
-            renderer.reset(cameras[1][0])
-            renderer.render(cameras[1][0])
-            renderer.read_output(*cameras[1])
-            check_depth(*cameras[1], 1.5)
         assert all(camera_scope_exists(rd) for rd, _ in cameras)
         renderer.cleanup(cameras[0][0])
         assert not camera_scope_exists(cameras[0][0])
@@ -610,7 +602,7 @@ def test_ovrtx_multiple_cameras_render_independent_views(monkeypatch, use_ovstag
 
 @pytest.mark.parametrize("batch", [False, True], ids=["lazy", "batched"])
 def test_async_cameras_publish_independently_with_capture_metadata_and_reset(monkeypatch, batch):
-    """Completed batches do not update another camera; reset retires only that camera's history."""
+    """Completed batches do not update another camera, and reset keeps the pipeline."""
     renderer = _make_ovrtx_renderer_without_backend()
     renderer.cfg.async_rendering = True
     renderer._initialized_scene = True
@@ -662,9 +654,11 @@ def test_async_cameras_publish_independently_with_capture_metadata_and_reset(mon
             renderer.read_output(cameras[index], camera_data[index])
 
     capture(1, (0, 1))
+    assert consume.call_count == 0
+    assert not any(data.output["rgb"].warp.numpy().any() for data in camera_data)
     capture(2, (0, 1))
     capture(3, (0,))
-    assert consume.call_count == 3  # Priming images are not extracted again on the next capture.
+    assert consume.call_count == 3
     for index, expected in enumerate((2, 1)):
         data = camera_data[index]
         np.testing.assert_array_equal(data.output["rgb"].warp.numpy(), expected)
@@ -679,21 +673,17 @@ def test_async_cameras_publish_independently_with_capture_metadata_and_reset(mon
 
     renderer.reset(cameras[0])
     capture(4, (0,))
-    np.testing.assert_array_equal(camera_data[0].output["rgb"].warp.numpy(), 4)
+    np.testing.assert_array_equal(camera_data[0].output["rgb"].warp.numpy(), 3)
     np.testing.assert_array_equal(saved_capture["pos_w"].warp.numpy(), 2)
     capture(5, (0, 1))
-    assert consume.call_count == 5
+    assert consume.call_count == 6
     np.testing.assert_array_equal(camera_data[0].output["rgb"].warp.numpy(), 4)
     np.testing.assert_array_equal(camera_data[1].output["rgb"].warp.numpy(), 2)
-    # A partial reset keeps the pipeline: the next image is the capture from before the reset.
-    renderer.reset(cameras[1], [0])
-    capture(6, (1,))
-    np.testing.assert_array_equal(camera_data[1].output["rgb"].warp.numpy(), 5)
     renderer.cleanup(cameras[0])
 
     monkeypatch.setattr(renderer, "_process_render_frame", MagicMock(side_effect=RuntimeError("output extraction")))
     with pytest.raises(RuntimeError, match="output extraction"):
-        capture(7, (1,))
+        capture(6, (1,))
     renderer.cleanup(cameras[1])
     assert all(operation.wait.called for operation in operations)
     assert renderer._camera_render_data == []

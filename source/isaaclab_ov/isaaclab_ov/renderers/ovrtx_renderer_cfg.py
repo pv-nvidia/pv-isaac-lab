@@ -68,10 +68,10 @@ class OVRTXRendererCfg(RendererCfg):
     async_rendering: bool = False
     """Trade one capture of camera latency for pipelined rendering. Defaults to False (synchronous).
 
-    Each camera returns its previous capture while rendering its next image. The first capture
-    and the first capture after a full reset wait for a fresh image. After a partial reset, the reset
-    environments show their previous episode for one step. The image observation terms can replace
-    this frame with zeros (``blank_first_frame``). Live pose and calibration fields
+    Each camera returns its previous capture while rendering its next image, so its outputs stay
+    zero until the second capture. After a reset, the reset environments show their previous episode
+    for one step. The image observation terms can replace this frame with zeros
+    (``blank_first_frame``). Live pose and calibration fields
     stay current. ``camera.data.info[output_name]["capture"]`` carries the image's matching
     ``pos_w``, ``quat_w_world``, ``intrinsic_matrices``, and per-environment ``frame`` indices.
     The ovstage path does not support pipelining and renders synchronously.

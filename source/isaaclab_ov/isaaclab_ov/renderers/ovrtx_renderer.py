@@ -263,8 +263,8 @@ class OVRTXCameraRenderData:
         self.warp_buffers: dict[str, wp.array] = {}
         self.intrinsic_bindings: list[AttributeBinding] = []
         self.camera_writes = _AsyncWriteBuffers[wp.array]()
-        self.pending: tuple[Operation[PendingFetch[RenderProductSetOutputs]], dict | None] | None = None
-        self.ready: tuple[Operation[PendingFetch[RenderProductSetOutputs]], dict | None] | None = None
+        self.pending: tuple[Operation[PendingFetch[RenderProductSetOutputs]], dict] | None = None
+        self.ready: tuple[Operation[PendingFetch[RenderProductSetOutputs]], dict] | None = None
         self.capture: dict[str, ProxyArray] = {}
         # Per-output metadata collected during render() and copied into CameraData.info by read_output().
         # Populated for "semantic_segmentation" (with an "idToLabels" mapping) and
@@ -668,19 +668,13 @@ class OVRTXRenderer(BaseRenderer):
         camera_data: CameraData | None = None,
     ) -> None:
         """Publish this product's pixels, and copy matching metadata when a sensor requests it."""
-        if self.cfg.async_rendering and not self._use_ovstage and render_data.ready is None:
-            return
         capture = {}
         if render_data.ready is not None:
             operation, capture = render_data.ready
-            if capture is None:
-                render_data.ready = None
-                return
             self._process_render_products((render_data,), operation.wait().fetch())
-            if render_data.ready is render_data.pending:
-                # Retain the native operation, but do not publish this priming image twice.
-                render_data.pending = (operation, None)
             render_data.ready = None
+        elif self.cfg.async_rendering and not self._use_ovstage:
+            return
         if camera_data is not None:
             assert camera_data.info is not None, "CameraData.info should be created in CameraData.allocate"
             for output_name in camera_data.info:
@@ -903,23 +897,6 @@ class OVRTXRenderer(BaseRenderer):
                 errors.append(error)
         return errors
 
-    def reset(self, render_data: OVRTXCameraRenderData, env_ids: Sequence[int] | None = None) -> None:
-        """Retire pre-reset frames on a full reset. A partial reset keeps the pipeline.
-
-        One capture covers every environment tile, so a fresh image for some environments costs a wait
-        for all of them. After a partial reset, the next published image is the capture submitted before
-        the reset: the tiles of ``env_ids`` still show their previous episode for one step. The image
-        observation terms can blank this frame (``blank_first_frame``). A full reset (``env_ids`` is None
-        or covers every environment) drains the pending captures, and the next capture primes a fresh image.
-        """
-        if env_ids is not None and len(env_ids) < render_data.num_envs:
-            return
-        errors = self.drain_pending_renders((render_data,))
-        render_data.pending = render_data.ready = None
-        render_data.capture = {}
-        if errors:
-            raise ExceptionGroup("OVRTX renders failed during camera reset", errors)
-
     def _process_render_products(
         self, render_data: Sequence[OVRTXCameraRenderData], products: RenderProductSetOutputs
     ) -> None:
@@ -1122,9 +1099,7 @@ class OVRTXRenderer(BaseRenderer):
                 unread = {data.ready[0] for data in render_data if data.ready is not None}
                 operation = self.backend.renderer.step_async(render_products=products, delta_time=_RENDER_DELTA_TIME)
                 for data in render_data:
-                    previous = data.pending
-                    data.pending = (operation, data.capture)
-                    data.ready = previous if previous is not None else data.pending
+                    data.ready, data.pending = data.pending, (operation, data.capture)
                 # Repeated submissions may replace unread results, but must still complete them.
                 for previous in unread:
                     previous.wait().fetch()
@@ -1160,7 +1135,8 @@ class OVRTXRenderer(BaseRenderer):
         if render_data is None:
             return
         try:
-            self.reset(render_data)
+            if errors := self.drain_pending_renders((render_data,)):
+                raise ExceptionGroup("OVRTX renders failed during camera cleanup", errors)
         finally:
             try:
                 render_data.cleanup()

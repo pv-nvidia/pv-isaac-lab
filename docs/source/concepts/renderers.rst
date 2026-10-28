@@ -375,8 +375,7 @@ Asynchronous Rendering
 
 :attr:`~isaaclab_ov.renderers.OVRTXRendererCfg.async_rendering` returns a camera's previous capture
 while rendering its next image. This allows rendering to overlap simulation and Python work.
-The first capture, including after a full reset, waits for a fresh image. The ovstage path stays
-synchronous.
+The ovstage path stays synchronous.
 
 Latency is one capture, not necessarily one physics or control step. State observations remain
 current, so enabling this option changes the policy's observation timing; training may need to
@@ -391,13 +390,12 @@ For a camera capturing once per environment step, steady-state operation is:
                                    |                                 |
                                    +---- image k renders ------------+--> physics k+1
 
-The first image is returned immediately after priming and repeated once on the next capture.
+The camera outputs stay zero until the second capture, because no earlier image exists.
 
 Each camera owns its pending observations. Reading camera A never changes camera B's pixels or
-metadata, even when they share a native render submission. A full reset discards that camera's pending
-observations and primes a fresh image.
+metadata, even when they share a native render submission.
 
-A partial environment reset keeps the pipeline. One capture renders every environment tile, so a fresh
+An environment reset keeps the pipeline. One capture renders every environment tile, so a fresh
 image for the reset environments would make all environments wait. Instead, the first observation of a
 new episode shows the tile from the end of the previous episode. Set ``blank_first_frame=True`` on the
 image observation terms, such as :class:`~isaaclab.envs.mdp.observations.image_rgb`, to replace this
