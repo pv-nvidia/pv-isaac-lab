@@ -74,8 +74,13 @@ def image_observations_cfg(data_type: str):
                 self.enable_corruption = False
                 self.concatenate_terms = True
 
+        @configclass
+        class ImageValidCfg(ObsGroup):
+            image_valid = ObsTerm(func=mdp.image_valid)
+
         policy: ObsGroup = PolicyCfg()
         critic: ObsGroup = ObservationsCfg.PolicyCfg()
+        image_valid: ObsGroup = ImageValidCfg()
 
     return ImageObservationsCfg()
 

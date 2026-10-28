@@ -416,6 +416,28 @@ class CameraImageBase(ManagerTermBase):
         raise NotImplementedError
 
 
+class image_valid(ManagerTermBase):
+    """Whether the camera image is valid: 0 in the first frame after a reset, 1 otherwise.
+
+    Pair it with ``blank_first_frame=True`` on the image terms, so that the policy knows when the image is blank.
+
+    Returns:
+        The validity flag. Shape is ``(num_envs, 1)``.
+    """
+
+    def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedEnv):
+        super().__init__(cfg, env)
+        self._first = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
+
+    def reset(self, env_ids: Sequence[int] | torch.Tensor | None = None):
+        self._first[slice(None) if env_ids is None else env_ids] = True
+
+    def __call__(self, env: ManagerBasedEnv) -> torch.Tensor:
+        valid = (~self._first).float().unsqueeze(1)
+        self._first.zero_()
+        return valid
+
+
 class image_rgb(CameraImageBase):
     """Color images from a camera sensor.
 
