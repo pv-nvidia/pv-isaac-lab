@@ -137,45 +137,18 @@ are interpolated directly into GPU Fabric storage. World-space point destination
 transform stack to avoid applying the environment or body pose twice. Only destinations whose
 update interval has elapsed are updated, and the authored USD point arrays remain unchanged.
 
-Points transport is controlled by
-:attr:`~isaaclab_physx.renderers.IsaacRtxRendererGlobalSettingsCfg.points_update_mode`:
+``Points`` destinations, such as MPM particle clouds, live on the simulation device. On a CUDA
+device, SDP writes the particle positions into GPU Fabric, and Kit RTX reads them from there.
+There is no setting that selects a CPU destination for ``Points``: a device-to-host copy of the
+particle positions on every visual update is not a supported configuration. ``BasisCurves``
+still use CPU destinations (NVBug 6502662).
 
-* ``"auto"`` uses GPU Fabric for procedural Points on Kit 110.4 and newer. Streamed Points,
-  older Kit versions and ``BasisCurves`` retain CPU destinations.
-* ``"gpu"`` keeps Points positions on the GPU, including when Points streaming is enabled.
-  Use this mode with a verified compatible Kit build: older Kit 110.4 builds can freeze a
-  single point with constant color or lose colors after GPU-first initialization. This mode
-  requires a CUDA simulation device and Kit 110.4 or newer; it does not enable GPU curves.
-* ``"cpu"`` explicitly selects the compatibility path for Points.
-
-For example, select GPU particle transport for a compatible runtime before creating the scene:
-
-.. code-block:: python
-
-   from isaaclab_physx.renderers import IsaacRtxRendererCfg, IsaacRtxRendererGlobalSettingsCfg
-
-   renderer_cfg = IsaacRtxRendererCfg(
-       global_settings=IsaacRtxRendererGlobalSettingsCfg(points_update_mode="gpu")
-   )
-
-The setting is shared by Kit and Isaac RTX consumers of the same Fabric resource. For a
-Kit-only visualizer, the equivalent launch argument is
-``--kit_args "--/isaaclab/render/points_update_mode=gpu"``. The default ``None`` on the
-configuration preserves the launch-time setting; absent that setting, transport is ``"auto"``.
-Configure it before geometry bindings are initialized, rather than changing it per frame.
-
-Older Kit 110.4 builds can use procedural GPU Points by excluding Points from geometry streaming:
-
-.. code-block:: text
-
-   --kit_args "--/UJITSO/geometry=false --/UJITSO/geometryTypes=Mesh"
-
-This selects analytic particle spheres while keeping the visual prim as ``UsdGeom.Points``;
-no particle mesh is generated. Geometry streaming controls preprocessing, loading and caching,
-and is not required for GPU position updates. Gaussian rendering requires Points streaming,
-so it needs either a compatible runtime with explicit GPU mode or the CPU fallback.
-Points streaming is enabled by default, including when ``/UJITSO/geometry`` is false or
-``/UJITSO/geometryTypes`` is empty.
+Kit builds before ``MIN_GPU_POINTS_KIT_BUILD`` in :mod:`isaaclab_physx.renderers.fabric` do not
+render streamed GPU Fabric ``Points`` correctly (OMPE-106051). When the Fabric resource binds a
+``Points`` destination on a CUDA device with such a Kit, it raises a ``RuntimeError`` that names
+the running Kit build and the required one. The error appears at the first geometry update: the
+first camera render, an eager sensor update, or a Kit visualizer step. Scenes without ``Points``
+prims and CPU simulation devices are not affected, because they never bind GPU Fabric ``Points``.
 
 GPU transport removes the SDP particle-position download. Particle-only scenes also skip
 GPU hierarchy propagation and its host waits when the producer publishes no rigid transforms.

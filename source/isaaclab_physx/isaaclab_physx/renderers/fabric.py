@@ -15,11 +15,38 @@ import usdrt
 import usdrt.hierarchy
 from pxr import Usd, UsdGeom, UsdUtils
 
-from isaaclab.app.settings_manager import get_settings_manager
 from isaaclab.scene_data import SceneDataFormat, SceneDataProvider
 from isaaclab.sim import BackendCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.buffers import TimestampedBuffer
+
+MIN_GPU_POINTS_KIT_BUILD = (110, 4, 2, 396646)
+"""First Kit build ``(major, minor, patch, build)`` that renders streamed GPU Fabric ``Points`` correctly.
+
+Earlier builds freeze a one-point prim with a constant ``displayColor`` or lose particle colors when
+the GPU positions exist before the first render (OMPE-106051, Kit MR 50394). Kit 110.3 never moves
+GPU points. Placeholder until the fix ships: it is above the newest build without it.
+"""
+
+
+def kit_build() -> tuple[int, int, int, int]:
+    """Return the running Kit build as ``(major, minor, patch, build)``.
+
+    ``get_build_version()`` returns strings like ``110.4.2+production.394335.109b3db0``. The short
+    ``get_kit_version_short()`` has no patch or build component, so it cannot tell fixed builds apart.
+    """
+    import omni.kit.app  # noqa: PLC0415 - requires the active Kit runtime
+
+    version, _, build = omni.kit.app.get_app().get_build_version().partition("+")
+    numbers = [int(part) for part in version.split(".")[:3]]
+    numbers += [0] * (3 - len(numbers))
+    number = next((int(part) for part in build.split(".") if part.isdigit()), 0)
+    return (*numbers, number)
+
+
+def supports_gpu_points() -> bool:
+    """Return whether the running Kit renders GPU Fabric ``Points`` (see :data:`MIN_GPU_POINTS_KIT_BUILD`)."""
+    return kit_build() >= MIN_GPU_POINTS_KIT_BUILD
 
 
 @wp.kernel(enable_backward=False)
@@ -161,22 +188,9 @@ class FabricBackend:
 
     def _bind_geometries(self, provider: SceneDataProvider, paths: tuple[str, ...]) -> None:
         """Bind declared destinations by device and cadence; SDP owns all data movement."""
-        import omni.kit.app  # noqa: PLC0415 - requires the active Kit runtime
-
         # Foreign physics publishes world points. Author the sink once so Kit's USD refresh agrees.
         groups = {}
-        kit_version = tuple(map(int, omni.kit.app.get_app().get_kit_version_short().split(".")))
-        settings = get_settings_manager()
-        streamed_types = (settings.get("/UJITSO/geometryTypes") or "Points").split(",")
-        points_streaming = settings.get("/UJITSO/geometry", False) or any(
-            value.strip() in {"All", "Points", "StaticPoints", "AnimatedPoints"} for value in streamed_types
-        )
-        points_mode = settings.get("/isaaclab/render/points_update_mode", "auto")
-        if points_mode not in {"auto", "cpu", "gpu"}:
-            raise ValueError(f"Invalid points_update_mode {points_mode!r}; expected 'auto', 'cpu', or 'gpu'.")
-        gpu_points = kit_version >= (110, 4) and (
-            points_mode == "gpu" or points_mode == "auto" and not points_streaming
-        )
+        cuda_points = []
         for path in paths:
             geometry = UsdGeom.Xformable(self.usd_stage.GetPrimAtPath(path))
             geometry.ClearXformOpOrder()
@@ -185,20 +199,25 @@ class FabricBackend:
             if prim_type == "Mesh":
                 device, frequency = self.device, 1
             elif prim_type in {"BasisCurves", "Points"}:
-                # Auto retains the fallback for runtimes with streamed GPU Points bugs.
-                # Explicit GPU mode is for compatible runtimes; curves still require CPU storage.
-                if prim_type == "Points" and points_mode == "gpu":
-                    if kit_version < (110, 4):
-                        raise RuntimeError("GPU Points updates require Kit 110.4 or newer; select 'auto' or 'cpu'.")
-                    if not wp.get_device(self.device).is_cuda:
-                        raise RuntimeError(
-                            "GPU Points updates require a CUDA simulation device; select 'auto' or 'cpu'."
-                        )
-                device = self.device if prim_type == "Points" and gpu_points else "cpu"
+                # Points stay on the simulation device, so a CUDA particle cloud never stages
+                # through the host. RTX Hydra reads curve points from CPU Fabric (NVBug 6502662).
+                device = self.device if prim_type == "Points" else "cpu"
                 frequency = geometry.GetPrim().GetAttribute("isaaclab:pointsUpdateFrequency").Get() or 1
+                if prim_type == "Points" and wp.get_device(device).is_cuda:
+                    cuda_points.append(path)
             else:
                 raise TypeError(f"Unsupported Fabric point destination {path}: {prim_type}.")
             groups.setdefault((device, frequency), []).append(path)
+        if cuda_points and not supports_gpu_points():
+            import omni.kit.app  # noqa: PLC0415 - requires the active Kit runtime
+
+            minimum = "{}.{}.{} build {}".format(*MIN_GPU_POINTS_KIT_BUILD)
+            raise RuntimeError(
+                f"Kit {omni.kit.app.get_app().get_build_version()} does not render GPU Fabric Points correctly"
+                f" (OMPE-106051); Kit {minimum} or newer is required. CUDA particle positions are never copied to"
+                f" the CPU for rendering, so {len(cuda_points)} Points prim(s) such as {cuda_points[0]} cannot be"
+                " rendered with this Kit."
+            )
         self.stage.SynchronizeToFabric()
         self._geometry_bindings = []
         for index, (group, group_paths) in enumerate(groups.items()):

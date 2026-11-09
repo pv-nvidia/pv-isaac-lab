@@ -116,6 +116,14 @@ callback or particle override is required:
    uv run --extra isaacsim isaaclab play --rl_library rsl_rl --task IsaacContrib-Franka-Pour \
      --checkpoint /path/to/model.pt --num_envs 1 --visualizer kit
 
+.. note::
+
+   Kit RTX reads MPM particle positions from GPU Fabric on a CUDA simulation device. Isaac Lab
+   never copies them to the CPU for rendering. Kit builds before ``MIN_GPU_POINTS_KIT_BUILD``
+   in :mod:`isaaclab_physx.renderers.fabric` render such particles incorrectly (OMPE-106051),
+   so the Kit visualizer and Isaac RTX cameras raise a ``RuntimeError`` with those builds. Use the
+   Isaac Sim release that Isaac Lab pins. See :doc:`scene_data_providers` for details.
+
 
 Coupling with rigid bodies
 --------------------------
