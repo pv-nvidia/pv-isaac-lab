@@ -505,6 +505,8 @@ def test_fabric_geometry_sink_uses_sdp_world_points_and_frame_cadence(monkeypatc
             np.testing.assert_allclose(
                 _fabric_curve_points_world(path), points[path].numpy(), atol=1.0e-6, err_msg=path
             )
+        if case != "cuda":
+            return  # The checks below do not depend on the Kit build.
         # Kit's first update can add prims; settle those structural changes before checking cadence.
         fabric.update_geometries(provider, 0)
 
@@ -518,20 +520,19 @@ def test_fabric_geometry_sink_uses_sdp_world_points_and_frame_cadence(monkeypatc
         for name in ("Mesh", "Curve"):
             path = f"/World/Geometry/{name}"
             np.testing.assert_allclose(_fabric_curve_points_world(path), points[path].numpy(), atol=1.0e-6)
-        if case != "no-points":
-            cloud = UsdGeom.Points(sim.stage.GetPrimAtPath("/World/Geometry/Cloud"))
-            fabric.update_geometries(provider, 1)
-            fabric.update_geometries(provider, 2)
-            np.testing.assert_allclose(_fabric_curve_points_world(str(cloud.GetPath()))[0], [1.0, 0.0, 2.0])
-            # Only the cloud is due here. It must enter Fabric without a device-to-host copy.
-            with monkeypatch.context() as patch:
-                patch.setattr(wp, "copy", _forbid_point_readback())
-                fabric.update_geometries(provider, 3)
-            np.testing.assert_allclose(
-                _fabric_curve_points_world(str(cloud.GetPath())), points["/World/Geometry/Cloud"].numpy(), atol=1.0e-6
-            )
-            # Runtime transport must not rewrite the authored USD points.
-            np.testing.assert_array_equal(cloud.GetPointsAttr().Get(), np.zeros((3, 3)))
+        cloud = UsdGeom.Points(sim.stage.GetPrimAtPath("/World/Geometry/Cloud"))
+        fabric.update_geometries(provider, 1)
+        fabric.update_geometries(provider, 2)
+        np.testing.assert_allclose(_fabric_curve_points_world(str(cloud.GetPath()))[0], [1.0, 0.0, 2.0])
+        # Only the cloud is due here. It must enter Fabric without a device-to-host copy.
+        with monkeypatch.context() as patch:
+            patch.setattr(wp, "copy", _forbid_point_readback())
+            fabric.update_geometries(provider, 3)
+        np.testing.assert_allclose(
+            _fabric_curve_points_world(str(cloud.GetPath())), points["/World/Geometry/Cloud"].numpy(), atol=1.0e-6
+        )
+        # Runtime transport must not rewrite the authored USD points.
+        np.testing.assert_array_equal(cloud.GetPointsAttr().Get(), np.zeros((3, 3)))
 
         # Moving a prim to a new Fabric bucket must refresh the sink even with unchanged physics.
         mesh_path = "/World/Geometry/Mesh"
@@ -614,17 +615,16 @@ def test_mpm_particle_writes_and_resets_are_visible_in_rtx(monkeypatch):
             # must not make particle rendering wait for an empty transform hierarchy.
             assert sim.get_scene_data_provider().transform_count == 0
             sim.step(render=False)
-
-            def unexpected_particle_wait(*_args, **_kwargs):
-                raise AssertionError("Particle-only rendering synchronized an empty rigid hierarchy")
-
             # The due particle update must reach GPU Fabric without a host wait or a host copy.
+            wait = Mock(side_effect=AssertionError("Particle-only rendering synchronized an empty rigid hierarchy"))
             with monkeypatch.context() as patch:
-                patch.setattr(wp, "synchronize_stream", unexpected_particle_wait)
-                patch.setattr(wp, "synchronize_device", unexpected_particle_wait)
+                patch.setattr(wp, "synchronize_stream", wait)
+                patch.setattr(wp, "synchronize_device", wait)
                 patch.setattr(wp, "copy", _forbid_point_readback())
                 sim.render()
                 scene["camera"].update(sim.get_rendering_dt(), force_recompute=True)
+            # A caller that catches the error, such as the visualizer step, must not hide a host wait.
+            wait.assert_not_called()
             state = scene["red"].data.default_particle_state_w.torch[1:2].clone()
             state[..., 1] += 0.4
             scene["red"].write_particle_state_to_sim_index(state, env_ids=[1])
@@ -723,7 +723,8 @@ _UNSUPPORTED_KIT_BUILDS = (
 )
 """Kit builds without the GPU Points fix, as ``omni.kit.app.get_app().get_build_version()`` returns them."""
 
-_SUPPORTED_KIT_BUILD = "{0[0]}.{0[1]}.{1[0]}+production.{1[1]}.0000000".format(*max(MIN_GPU_POINTS_KIT_BUILDS.items()))
+(_major, _minor), (_patch, _number) = max(MIN_GPU_POINTS_KIT_BUILDS.items())
+_SUPPORTED_KIT_BUILD = f"{_major}.{_minor}.{_patch}+production.{_number}.0000000"
 """The first Kit build with the GPU Points fix on the newest supported release line."""
 
 

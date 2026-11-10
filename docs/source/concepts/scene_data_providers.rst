@@ -131,36 +131,29 @@ change, the resource refreshes array views without repeating path matching or sc
 capture. Otherwise, it reuses the hierarchy. Unchanged requests do not acquire
 writable Fabric arrays. Renderers use this same path regardless of physics backend.
 
-The same Fabric resource receives geometry through ``update_geometries(provider, frame)``.
-PhysX publishes its native ``FabricPoints`` without a conversion or rewrite. Foreign mesh points
-are interpolated directly into GPU Fabric storage. World-space point destinations reset their
-transform stack to avoid applying the environment or body pose twice. Only destinations whose
-update interval has elapsed are updated, and the authored USD point arrays remain unchanged.
+``update_geometries(provider, frame)`` handles geometry. PhysX publishes native
+``FabricPoints`` directly; other backends interpolate mesh points into GPU Fabric
+storage. SDP updates ``Points`` and ``BasisCurves`` when their update interval
+elapses, without writing USD. Kit Hydra requires CPU destinations for ``BasisCurves``
+(NVBug 6502662). World-space points reset their transform stack to avoid applying the
+body or environment pose twice. ``FabricMatrix44`` and ``FabricPoints`` hold arrays
+only, not bindings or engine handles.
 
-``Points`` destinations, such as MPM particle clouds, live on the simulation device. On a CUDA
-device, SDP writes the particle positions into GPU Fabric, and Kit RTX reads them from there.
-There is no setting that selects a CPU destination for ``Points``. A device-to-host copy of the
-particle positions on every visual update is not a supported configuration. ``BasisCurves``
-still use CPU destinations (NVBug 6502662).
+``Points`` destinations, such as MPM particle clouds, stay on the simulation device. On a
+CUDA device, SDP writes the particle positions into GPU Fabric, and Kit RTX reads them from
+there. No setting selects a CPU destination for ``Points``.
 
-``MIN_GPU_POINTS_KIT_BUILDS`` in :mod:`isaaclab_physx.renderers.fabric` lists the first Kit build
-of each release line that renders streamed GPU Fabric ``Points`` correctly (OMPE-106051). On an
-older build, or on a release line that is not in the list, the Fabric resource raises a
-``RuntimeError`` when it binds a ``Points`` destination on a CUDA device. The error names the
-running Kit build and the listed builds, and the stage stays unchanged.
+``isaaclab_physx.renderers.fabric.MIN_GPU_POINTS_KIT_BUILDS`` lists the first Kit build of
+each release line that renders streamed GPU Fabric ``Points`` correctly (OMPE-106051). With an
+older build, the Fabric resource raises a ``RuntimeError`` when it binds a ``Points``
+destination on a CUDA device. A release line that is not in the list gives the same error.
+The error names the running Kit build and the listed builds, and the stage stays unchanged.
+An Isaac RTX camera raises it at its first render or eager sensor update. A Kit visualizer
+logs it and closes, and the simulation continues without that visualizer.
 
-The error appears at the first geometry update. An Isaac RTX camera raises it at its first render
-or eager sensor update. A Kit visualizer logs it and closes, and the simulation continues without
-that visualizer. Scenes without ``Points`` prims and CPU simulation devices are not affected,
-because they never bind GPU Fabric ``Points``.
-
-GPU transport removes the SDP particle-position download. Particle-only scenes also skip
-GPU hierarchy propagation and its host waits when the producer publishes no rigid transforms.
-Scenes with rigid bodies retain hierarchy synchronization, and native rendering or solver
-metadata can still require host transfers or waits. GPU particle storage does not imply a
-completely asynchronous simulation/render frame.
-
-``FabricMatrix44`` and ``FabricPoints`` contain only array storage, not bindings or native engine handles.
+Particle-only scenes skip GPU hierarchy propagation and its host waits, because the producer
+publishes no rigid transforms. Scenes with rigid bodies retain hierarchy synchronization, and
+native rendering or solver metadata can still require host transfers or waits.
 
 Newton backend
 --------------

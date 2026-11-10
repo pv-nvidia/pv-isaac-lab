@@ -36,16 +36,14 @@ def _renders_gpu_points(build_version: str) -> bool:
     """Return whether a Kit build renders GPU Fabric ``Points`` (see :data:`MIN_GPU_POINTS_KIT_BUILDS`).
 
     Args:
-        build_version: The result of ``get_build_version()``, such as
-            ``110.4.2+production.394335.109b3db0``. The result of ``get_kit_version_short()`` has no
-            patch or build component, so it cannot tell a fixed build from an older one.
+        build_version: The result of ``get_build_version()``, in the form
+            ``major.minor.patch[-tag]+branch.build.hash``. An example is
+            ``110.4.2+production.394335.109b3db0``. A string of another form is not a build with the fix.
     """
-    version, _, build = build_version.partition("+")
-    # A release such as ``110.4.2-rc.1`` or ``103.5`` must not fail the parse. A component that is
-    # absent or not a number counts as 0.
-    release = re.match(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", version)
-    major, minor, patch = (int(part or 0) for part in release.groups()) if release else (0, 0, 0)
-    number = next((int(part) for part in build.split(".") if part.isdecimal()), 0)
+    match = re.match(r"(\d+)\.(\d+)\.(\d+)[^+]*\+[^.]*\.(\d+)", build_version)
+    if match is None:
+        return False
+    major, minor, patch, number = map(int, match.groups())
     minimum = MIN_GPU_POINTS_KIT_BUILDS.get((major, minor))
     return minimum is not None and (patch, number) >= minimum
 
