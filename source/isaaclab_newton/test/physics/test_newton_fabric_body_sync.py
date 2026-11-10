@@ -38,7 +38,7 @@ from isaaclab_newton.renderers import NewtonWarpRendererCfg
 from isaaclab_newton.sim.spawners.mpm import MPMGridCfg
 from isaaclab_physx.renderers import IsaacRtxRendererCfg
 from isaaclab_physx.renderers.fabric import (
-    MIN_GPU_POINTS_KIT_BUILD,
+    MIN_GPU_POINTS_KIT_BUILDS,
     FabricBackend,
     FabricBackendCfg,
     supports_gpu_points,
@@ -443,21 +443,15 @@ def test_nested_articulation_follows_root_pose_writes():
 
 @pytest.mark.isaacsim_ci
 @pytest.mark.skipif(not wp.get_cuda_device_count(), reason="CUDA is unavailable")
-@pytest.mark.parametrize(
-    "case", ["kit", "minimum-kit", "newer-kit", "legacy-kit", "unfixed-kit", "cpu-device", "no-points"]
-)
+@pytest.mark.parametrize("case", ["cuda", "cpu-device", "no-points"])
 def test_fabric_geometry_sink_uses_sdp_world_points_and_frame_cadence(monkeypatch, case):
     """Mesh, curve and cloud sinks consume only named SDP buffers, independent of Newton internals.
 
     A CUDA cloud is bound to GPU Fabric and never copied to the host. Kit builds without the GPU
-    Points fix raise instead of selecting the CPU path. A CPU simulation device and a scene
-    without ``Points`` prims do not depend on the Kit build.
+    Points fix raise instead of selecting the CPU path, and leave the stage unchanged. A CPU
+    simulation device and a scene without ``Points`` prims bind on those Kit builds too.
     """
-    if case == "kit" and not supports_gpu_points():
-        pytest.skip("The running Kit does not render GPU Fabric Points (OMPE-106051)")
-    build = _KIT_BUILDS.get(case, _KIT_BUILDS["legacy-kit"])
     app = Mock(wraps=simulation_app)
-    app.get_build_version.return_value = build
     device = "cpu" if case == "cpu-device" else "cuda:0"
     cfg = SimulationCfg(device=device, physics=NewtonCfg(), visualizer_cfgs=[])
     with build_simulation_context(sim_cfg=cfg) as sim:
@@ -493,14 +487,18 @@ def test_fabric_geometry_sink_uses_sdp_world_points_and_frame_cadence(monkeypatc
             )
         )
         fabric = sim.get_or_create_backend(FabricBackendCfg(stage=sim.stage, device=sim.device))
-        # The Kit build is checked once, when the destinations are bound.
+        # The Kit build is checked when the destinations are bound, and only for CUDA Points.
         with monkeypatch.context() as patch:
-            if case != "kit":
-                patch.setattr(omni.kit.app, "get_app", lambda: app)
-            if case in {"legacy-kit", "unfixed-kit"}:
-                with pytest.raises(RuntimeError, match="does not render GPU Fabric Points"):
-                    fabric.update_geometries(provider, 0)
-                return
+            patch.setattr(omni.kit.app, "get_app", lambda: app)
+            if case == "cuda":
+                for build in _UNSUPPORTED_KIT_BUILDS:
+                    app.get_build_version.return_value = build
+                    with pytest.raises(RuntimeError, match="does not render GPU Fabric Points"):
+                        fabric.update_geometries(provider, 0)
+                # A rejected bind must leave the authored transforms of every destination in place.
+                for path in points:
+                    assert not UsdGeom.Xformable(sim.stage.GetPrimAtPath(path)).GetResetXformStack(), path
+            app.get_build_version.return_value = _SUPPORTED_KIT_BUILD if case == "cuda" else _UNSUPPORTED_KIT_BUILDS[0]
             fabric.update_geometries(provider, 0)
         simulation_app.update()
         wp.synchronize_device(sim.device)
@@ -526,7 +524,7 @@ def test_fabric_geometry_sink_uses_sdp_world_points_and_frame_cadence(monkeypatc
             fabric.update_geometries(provider, 1)
             fabric.update_geometries(provider, 2)
             np.testing.assert_allclose(_fabric_curve_points_world(str(cloud.GetPath()))[0], [1.0, 0.0, 2.0])
-            # Only the cloud is due here; it must enter Fabric without a device-to-host copy.
+            # Only the cloud is due here. It must enter Fabric without a device-to-host copy.
             with monkeypatch.context() as patch:
                 patch.setattr(wp, "copy", _forbid_point_readback())
                 fabric.update_geometries(provider, 3)
@@ -718,13 +716,17 @@ def _frame_scene(frame_path: str, translation, device: str = "cuda:0"):
             sim.register_interactive_scene(None)
 
 
-_KIT_BUILDS = {
-    "legacy-kit": "110.3.0+feature.371399.00c488ae",  # Isaac Sim 6.1: GPU Fabric Points do not move.
-    "unfixed-kit": "110.4.2+production.394335.109b3db0",  # Isaac Sim 6.3 alpha: streamed GPU Points bugs.
-    "minimum-kit": "{}.{}.{}+production.{}.0000000".format(*MIN_GPU_POINTS_KIT_BUILD),
-    "newer-kit": "111.1.0+release.999999.0000000",
-}
-"""Kit build strings mocked through ``omni.kit.app.get_app().get_build_version()``."""
+_UNSUPPORTED_KIT_BUILDS = (
+    "110.3.0+feature.371399.00c488ae",  # Isaac Sim 6.1: GPU Fabric Points do not move.
+    "110.4.0+feature.386251.187cf21b.gl",  # Isaac Sim 6.2: streamed GPU Points freeze or lose their colors.
+    "110.4.2+production.394335.109b3db0",  # Isaac Sim 6.3 alpha: the same bugs.
+    "110.4.2-rc.1+production.394335.109b3db0",  # A pre-release tag must not fail the parse.
+    "111.1.0+main.1.0000000",  # A release line whose first builds do not have the fix.
+)
+"""Kit builds without the GPU Points fix, as ``omni.kit.app.get_app().get_build_version()`` returns them."""
+
+_SUPPORTED_KIT_BUILD = "{0[0]}.{0[1]}.{1[0]}+production.{1[1]}.0000000".format(*max(MIN_GPU_POINTS_KIT_BUILDS.items()))
+"""The first Kit build with the GPU Points fix on the newest supported release line."""
 
 
 def _forbid_point_readback():

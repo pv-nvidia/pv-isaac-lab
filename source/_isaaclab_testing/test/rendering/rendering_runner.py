@@ -20,7 +20,6 @@ from isaaclab_newton.physics import reset_mpm_solver_state
 from isaaclab_newton.renderers import NewtonWarpRendererCfg
 from isaaclab_ov.renderers import OVRTXRendererCfg
 from isaaclab_physx.renderers import IsaacRtxRendererCfg
-from isaaclab_physx.renderers.fabric import supports_gpu_points
 from newton import StateFlags
 from rendering_cases import RenderCase
 from rendering_runtime import build_rendering_scene
@@ -60,8 +59,12 @@ def run_rendering_case(
     artifact_namespace: str | None = None,
 ) -> None:
     """Capture the declared scene state and all compatible camera outputs."""
-    if case.scene == "mpm" and case.renderer == "isaac_rtx" and not supports_gpu_points():
-        pytest.skip("The running Kit does not render GPU Fabric Points (OMPE-106051)")
+    if case.scene == "mpm" and case.renderer == "isaac_rtx":
+        # The Fabric module needs the Kit runtime, and the kitless suite imports this runner too.
+        from isaaclab_physx.renderers.fabric import supports_gpu_points
+
+        if not supports_gpu_points():
+            pytest.skip("The running Kit does not render GPU Fabric Points (OMPE-106051)")
     configure_seed(42, torch_deterministic=True)
     scene = make_rendering_scene_spec(case.scene, case.physics)
     scene.cfg.camera.renderer_cfg = {

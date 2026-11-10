@@ -139,22 +139,27 @@ update interval has elapsed are updated, and the authored USD point arrays remai
 
 ``Points`` destinations, such as MPM particle clouds, live on the simulation device. On a CUDA
 device, SDP writes the particle positions into GPU Fabric, and Kit RTX reads them from there.
-There is no setting that selects a CPU destination for ``Points``: a device-to-host copy of the
+There is no setting that selects a CPU destination for ``Points``. A device-to-host copy of the
 particle positions on every visual update is not a supported configuration. ``BasisCurves``
 still use CPU destinations (NVBug 6502662).
 
-Kit builds before ``MIN_GPU_POINTS_KIT_BUILD`` in :mod:`isaaclab_physx.renderers.fabric` do not
-render streamed GPU Fabric ``Points`` correctly (OMPE-106051). When the Fabric resource binds a
-``Points`` destination on a CUDA device with such a Kit, it raises a ``RuntimeError`` that names
-the running Kit build and the required one. The error appears at the first geometry update: the
-first camera render, an eager sensor update, or a Kit visualizer step. Scenes without ``Points``
-prims and CPU simulation devices are not affected, because they never bind GPU Fabric ``Points``.
+``MIN_GPU_POINTS_KIT_BUILDS`` in :mod:`isaaclab_physx.renderers.fabric` lists the first Kit build
+of each release line that renders streamed GPU Fabric ``Points`` correctly (OMPE-106051). On an
+older build, or on a release line that is not in the list, the Fabric resource raises a
+``RuntimeError`` when it binds a ``Points`` destination on a CUDA device. The error names the
+running Kit build and the listed builds, and the stage stays unchanged.
+
+The error appears at the first geometry update. An Isaac RTX camera raises it at its first render
+or eager sensor update. A Kit visualizer logs it and closes, and the simulation continues without
+that visualizer. Scenes without ``Points`` prims and CPU simulation devices are not affected,
+because they never bind GPU Fabric ``Points``.
 
 GPU transport removes the SDP particle-position download. Particle-only scenes also skip
 GPU hierarchy propagation and its host waits when the producer publishes no rigid transforms.
 Scenes with rigid bodies retain hierarchy synchronization, and native rendering or solver
 metadata can still require host transfers or waits. GPU particle storage does not imply a
 completely asynchronous simulation/render frame.
+
 ``FabricMatrix44`` and ``FabricPoints`` contain only array storage, not bindings or native engine handles.
 
 Newton backend

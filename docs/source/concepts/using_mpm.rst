@@ -119,10 +119,11 @@ callback or particle override is required:
 .. note::
 
    Kit RTX reads MPM particle positions from GPU Fabric on a CUDA simulation device. Isaac Lab
-   never copies them to the CPU for rendering. Kit builds before ``MIN_GPU_POINTS_KIT_BUILD``
-   in :mod:`isaaclab_physx.renderers.fabric` render such particles incorrectly (OMPE-106051),
-   so the Kit visualizer and Isaac RTX cameras raise a ``RuntimeError`` with those builds. Use the
-   Isaac Sim release that Isaac Lab pins. See :doc:`scene_data_providers` for details.
+   never copies them to the CPU for rendering. Kit builds before those in
+   ``MIN_GPU_POINTS_KIT_BUILDS`` of :mod:`isaaclab_physx.renderers.fabric` render such particles
+   incorrectly (OMPE-106051). With those builds, an Isaac RTX camera raises a ``RuntimeError``,
+   and the Kit visualizer logs the same error and closes. Use the Isaac Sim release that
+   Isaac Lab pins. See :doc:`scene_data_providers` for details.
 
 
 Coupling with rigid bodies

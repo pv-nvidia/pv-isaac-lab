@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import field
 
 import warp as wp
@@ -20,33 +21,40 @@ from isaaclab.sim import BackendCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.buffers import TimestampedBuffer
 
-MIN_GPU_POINTS_KIT_BUILD = (110, 4, 2, 396646)
-"""First Kit build ``(major, minor, patch, build)`` that renders streamed GPU Fabric ``Points`` correctly.
+MIN_GPU_POINTS_KIT_BUILDS = {(110, 4): (2, 396646)}
+"""First Kit ``(patch, build)`` of each ``(major, minor)`` release line that renders GPU Fabric ``Points``.
 
-Earlier builds freeze a one-point prim with a constant ``displayColor`` or lose particle colors when
-the GPU positions exist before the first render (OMPE-106051, Kit MR 50394). Kit 110.3 never moves
-GPU points. Placeholder until the fix ships: it is above the newest build without it.
+Earlier builds freeze a one-point prim with a constant ``displayColor``, or lose the particle colors
+when the GPU positions exist before the first render (OMPE-106051, Kit MR 50394). Kit 110.3 never
+moves GPU points. A release line without an entry has no build with the fix, so a newer line needs
+its own entry. The 110.4 entry is a placeholder until the fix ships: it is above the newest build
+without the fix.
 """
 
 
-def kit_build() -> tuple[int, int, int, int]:
-    """Return the running Kit build as ``(major, minor, patch, build)``.
+def _renders_gpu_points(build_version: str) -> bool:
+    """Return whether a Kit build renders GPU Fabric ``Points`` (see :data:`MIN_GPU_POINTS_KIT_BUILDS`).
 
-    ``get_build_version()`` returns strings like ``110.4.2+production.394335.109b3db0``. The short
-    ``get_kit_version_short()`` has no patch or build component, so it cannot tell fixed builds apart.
+    Args:
+        build_version: The result of ``get_build_version()``, such as
+            ``110.4.2+production.394335.109b3db0``. The result of ``get_kit_version_short()`` has no
+            patch or build component, so it cannot tell a fixed build from an older one.
     """
-    import omni.kit.app  # noqa: PLC0415 - requires the active Kit runtime
-
-    version, _, build = omni.kit.app.get_app().get_build_version().partition("+")
-    numbers = [int(part) for part in version.split(".")[:3]]
-    numbers += [0] * (3 - len(numbers))
-    number = next((int(part) for part in build.split(".") if part.isdigit()), 0)
-    return (*numbers, number)
+    version, _, build = build_version.partition("+")
+    # A release such as ``110.4.2-rc.1`` or ``103.5`` must not fail the parse. A component that is
+    # absent or not a number counts as 0.
+    release = re.match(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", version)
+    major, minor, patch = (int(part or 0) for part in release.groups()) if release else (0, 0, 0)
+    number = next((int(part) for part in build.split(".") if part.isdecimal()), 0)
+    minimum = MIN_GPU_POINTS_KIT_BUILDS.get((major, minor))
+    return minimum is not None and (patch, number) >= minimum
 
 
 def supports_gpu_points() -> bool:
-    """Return whether the running Kit renders GPU Fabric ``Points`` (see :data:`MIN_GPU_POINTS_KIT_BUILD`)."""
-    return kit_build() >= MIN_GPU_POINTS_KIT_BUILD
+    """Return whether the running Kit renders GPU Fabric ``Points`` (see :data:`MIN_GPU_POINTS_KIT_BUILDS`)."""
+    import omni.kit.app  # noqa: PLC0415 - requires the active Kit runtime
+
+    return _renders_gpu_points(omni.kit.app.get_app().get_build_version())
 
 
 @wp.kernel(enable_backward=False)
@@ -188,36 +196,44 @@ class FabricBackend:
 
     def _bind_geometries(self, provider: SceneDataProvider, paths: tuple[str, ...]) -> None:
         """Bind declared destinations by device and cadence; SDP owns all data movement."""
-        # Foreign physics publishes world points. Author the sink once so Kit's USD refresh agrees.
         groups = {}
         cuda_points = []
         for path in paths:
-            geometry = UsdGeom.Xformable(self.usd_stage.GetPrimAtPath(path))
-            geometry.ClearXformOpOrder()
-            geometry.SetResetXformStack(True)
-            prim_type = geometry.GetPrim().GetTypeName()
+            prim = self.usd_stage.GetPrimAtPath(path)
+            prim_type = prim.GetTypeName()
             if prim_type == "Mesh":
                 device, frequency = self.device, 1
             elif prim_type in {"BasisCurves", "Points"}:
                 # Points stay on the simulation device, so a CUDA particle cloud never stages
                 # through the host. RTX Hydra reads curve points from CPU Fabric (NVBug 6502662).
                 device = self.device if prim_type == "Points" else "cpu"
-                frequency = geometry.GetPrim().GetAttribute("isaaclab:pointsUpdateFrequency").Get() or 1
+                frequency = prim.GetAttribute("isaaclab:pointsUpdateFrequency").Get() or 1
                 if prim_type == "Points" and wp.get_device(device).is_cuda:
                     cuda_points.append(path)
             else:
                 raise TypeError(f"Unsupported Fabric point destination {path}: {prim_type}.")
             groups.setdefault((device, frequency), []).append(path)
-        if cuda_points and not supports_gpu_points():
+        # Reject the scene before the stage is authored, so that a failed bind leaves it unchanged.
+        if cuda_points:
             import omni.kit.app  # noqa: PLC0415 - requires the active Kit runtime
 
-            minimum = "{}.{}.{} build {}".format(*MIN_GPU_POINTS_KIT_BUILD)
-            raise RuntimeError(
-                f"Kit {omni.kit.app.get_app().get_build_version()} does not render GPU Fabric Points correctly"
-                f" (OMPE-106051); Kit {minimum} or newer is required. CUDA particle positions are never copied to"
-                f" the CPU for rendering, so {len(cuda_points)} Points prim(s) such as {cuda_points[0]} cannot be"
-                " rendered with this Kit."
-            )
+            build = omni.kit.app.get_app().get_build_version()
+            if not _renders_gpu_points(build):
+                minimums = ", ".join(
+                    f"{major}.{minor}.{patch} build {number}"
+                    for (major, minor), (patch, number) in MIN_GPU_POINTS_KIT_BUILDS.items()
+                )
+                raise RuntimeError(
+                    f"Kit {build} does not render GPU Fabric Points correctly (OMPE-106051). The first Kit build"
+                    f" with the fix, for each supported release line: {minimums}. CUDA particle positions are"
+                    f" never copied to the CPU for rendering, so {len(cuda_points)} Points prim(s) such as"
+                    f" {cuda_points[0]} cannot be rendered with this Kit."
+                )
+        # Foreign physics publishes world points. Author the sink once so Kit's USD refresh agrees.
+        for path in paths:
+            geometry = UsdGeom.Xformable(self.usd_stage.GetPrimAtPath(path))
+            geometry.ClearXformOpOrder()
+            geometry.SetResetXformStack(True)
         self.stage.SynchronizeToFabric()
         self._geometry_bindings = []
         for index, (group, group_paths) in enumerate(groups.items()):
