@@ -714,18 +714,19 @@ def _frame_scene(frame_path: str, translation, device: str = "cuda:0"):
             sim.register_interactive_scene(None)
 
 
+(_major, _minor), (_patch, _number) = max(MIN_GPU_POINTS_KIT_BUILDS.items())
+_SUPPORTED_KIT_BUILD = f"{_major}.{_minor}.{_patch}+production.{_number}.0000000"
+"""The first Kit build with the GPU Points fix on the newest supported release line."""
+
 _UNSUPPORTED_KIT_BUILDS = (
     "110.3.0+feature.371399.00c488ae",  # Isaac Sim 6.1: GPU Fabric Points do not move.
     "110.4.0+feature.386251.187cf21b.gl",  # Isaac Sim 6.2: streamed GPU Points freeze or lose their colors.
     "110.4.2+production.394335.109b3db0",  # Isaac Sim 6.3 alpha: the same bugs.
     "110.4.2-rc.1+production.394335.109b3db0",  # A pre-release tag must not fail the parse.
     "111.1.0+main.1.0000000",  # A release line whose first builds do not have the fix.
+    f"{_major}.{_minor}.{_patch}+production.{_number}x.0000000",  # A build token must be a complete number.
 )
-"""Kit builds without the GPU Points fix, as ``omni.kit.app.get_app().get_build_version()`` returns them."""
-
-(_major, _minor), (_patch, _number) = max(MIN_GPU_POINTS_KIT_BUILDS.items())
-_SUPPORTED_KIT_BUILD = f"{_major}.{_minor}.{_patch}+production.{_number}.0000000"
-"""The first Kit build with the GPU Points fix on the newest supported release line."""
+"""Results of ``omni.kit.app.get_app().get_build_version()`` that are not a Kit build with the GPU Points fix."""
 
 
 def _forbid_point_readback():
@@ -733,7 +734,7 @@ def _forbid_point_readback():
     copy = wp.copy
 
     def copy_without_point_readback(dest, src, *args, **kwargs):
-        assert not (src.device.is_cuda and dest.device.is_cpu), "Particle rendering copied points to the CPU"
+        assert not (src.device.is_cuda and dest.device.is_cpu), "The particle update copied CUDA data to the CPU"
         return copy(dest, src, *args, **kwargs)
 
     return copy_without_point_readback

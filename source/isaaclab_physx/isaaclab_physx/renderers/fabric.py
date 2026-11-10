@@ -40,7 +40,7 @@ def _renders_gpu_points(build_version: str) -> bool:
             ``major.minor.patch[-tag]+branch.build.hash``. An example is
             ``110.4.2+production.394335.109b3db0``. A string of another form is not a build with the fix.
     """
-    match = re.match(r"(\d+)\.(\d+)\.(\d+)[^+]*\+[^.]*\.(\d+)", build_version)
+    match = re.match(r"(\d+)\.(\d+)\.(\d+)[^+]*\+[^.]*\.(\d+)(?:\.|$)", build_version)
     if match is None:
         return False
     major, minor, patch, number = map(int, match.groups())

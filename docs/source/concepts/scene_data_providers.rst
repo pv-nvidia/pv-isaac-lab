@@ -148,8 +148,12 @@ each release line that renders streamed GPU Fabric ``Points`` correctly (OMPE-10
 older build, the Fabric resource raises a ``RuntimeError`` when it binds a ``Points``
 destination on a CUDA device. A release line that is not in the list gives the same error.
 The error names the running Kit build and the listed builds, and the stage stays unchanged.
-An Isaac RTX camera raises it at its first render or eager sensor update. A Kit visualizer
-logs it and closes, and the simulation continues without that visualizer.
+
+An Isaac RTX camera raises this error at its first render or eager sensor update. A Kit
+visualizer raises it from ``render_rgb_array()``. A step of a Kit visualizer does not raise it:
+``SimulationContext`` logs the error and closes that visualizer, and the simulation continues.
+If no other visualizer is open, ``SimulationContext.is_running()`` then returns ``False``, and
+a loop on it ends.
 
 Particle-only scenes skip GPU hierarchy propagation and its host waits, because the producer
 publishes no rigid transforms. Scenes with rigid bodies retain hierarchy synchronization, and
