@@ -720,6 +720,7 @@ _SUPPORTED_KIT_BUILD = "110.4.2+production.396646.0000000"
 _UNSUPPORTED_KIT_BUILDS = (
     "110.3.0+feature.371399.00c488ae",  # Isaac Sim 6.1: a release line without an entry.
     "110.4.0+feature.386251.187cf21b.gl",  # Isaac Sim 6.2: a patch below the minimum.
+    "110.4.1+production.400000.0000000",  # A patch below the minimum, with a build number above it.
     "110.4.2+production.394335.109b3db0",  # Isaac Sim 6.3 alpha: a build below the minimum.
     "110.4.2-rc.1+production.394335.109b3db0",  # A pre-release tag must not fail the parse.
     "111.1.0+main.1.0000000",  # A newer release line without an entry.
