@@ -21,14 +21,14 @@ from isaaclab.sim import BackendCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.buffers import TimestampedBuffer
 
-MIN_GPU_POINTS_KIT_BUILDS = {(110, 4): (2, 396646)}
+MIN_GPU_POINTS_KIT_BUILDS: dict[tuple[int, int], tuple[int, int]] = {}
 """First Kit ``(patch, build)`` of each ``(major, minor)`` release line that renders GPU Fabric ``Points``.
 
 Earlier builds freeze a one-point prim with a constant ``displayColor``, or lose the particle colors
 when the GPU positions exist before the first render (OMPE-106051, Kit MR 50394). Kit 110.3 never
-moves GPU points. A release line without an entry has no build with the fix, so a newer line needs
-its own entry. The 110.4 entry is a placeholder until the fix ships: it is above the newest build
-without the fix.
+moves GPU points. A release line without an entry has no build with the fix, so each line needs
+its own entry. The table is empty, because no Kit build has the fix yet. An entry such as
+``(110, 4): (2, 400000)`` accepts Kit 110.4.2 from build 400000, and each later 110.4 patch.
 """
 
 
@@ -216,9 +216,9 @@ class FabricBackend:
                 )
                 raise RuntimeError(
                     f"Kit {build} does not render GPU Fabric Points correctly (OMPE-106051). The first Kit build"
-                    f" with the fix, for each supported release line: {minimums}. CUDA particle positions are"
-                    f" never copied to the CPU for rendering, so {len(cuda_points)} Points prim(s) such as"
-                    f" {cuda_points[0]} cannot be rendered with this Kit."
+                    f" with the fix, for each supported release line: {minimums or 'none yet'}. CUDA particle"
+                    f" positions are never copied to the CPU for rendering, so {len(cuda_points)} Points prim(s)"
+                    f" such as {cuda_points[0]} cannot be rendered with this Kit."
                 )
         # Foreign physics publishes world points. Author the sink once so Kit's USD refresh agrees.
         for path in paths:

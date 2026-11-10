@@ -37,11 +37,7 @@ from isaaclab_newton.physics import (
 from isaaclab_newton.renderers import NewtonWarpRendererCfg
 from isaaclab_newton.sim.spawners.mpm import MPMGridCfg
 from isaaclab_physx.renderers import IsaacRtxRendererCfg
-from isaaclab_physx.renderers.fabric import (
-    MIN_GPU_POINTS_KIT_BUILDS,
-    FabricBackend,
-    FabricBackendCfg,
-)
+from isaaclab_physx.renderers.fabric import FabricBackend, FabricBackendCfg
 from isaaclab_physx.sim.schemas import PhysxRigidBodyCfg
 from isaaclab_visualizers.kit import KitBackendCfg
 
@@ -489,6 +485,7 @@ def test_fabric_geometry_sink_uses_sdp_world_points_and_frame_cadence(monkeypatc
         # The Kit build is checked when the destinations are bound, and only for CUDA Points.
         with monkeypatch.context() as patch:
             patch.setattr(omni.kit.app, "get_app", lambda: app)
+            patch.setattr("isaaclab_physx.renderers.fabric.MIN_GPU_POINTS_KIT_BUILDS", _MIN_KIT_BUILDS)
             if case == "cuda":
                 for build in _UNSUPPORTED_KIT_BUILDS:
                     app.get_build_version.return_value = build
@@ -714,19 +711,21 @@ def _frame_scene(frame_path: str, translation, device: str = "cuda:0"):
             sim.register_interactive_scene(None)
 
 
-(_major, _minor), (_patch, _number) = max(MIN_GPU_POINTS_KIT_BUILDS.items())
-_SUPPORTED_KIT_BUILD = f"{_major}.{_minor}.{_patch}+production.{_number}.0000000"
-"""The first Kit build with the GPU Points fix on the newest supported release line."""
+_MIN_KIT_BUILDS = {(110, 4): (2, 396646)}
+"""A ``MIN_GPU_POINTS_KIT_BUILDS`` table for the test, which must not depend on the released entries."""
+
+_SUPPORTED_KIT_BUILD = "110.4.2+production.396646.0000000"
+"""The first Kit build that :data:`_MIN_KIT_BUILDS` accepts."""
 
 _UNSUPPORTED_KIT_BUILDS = (
-    "110.3.0+feature.371399.00c488ae",  # Isaac Sim 6.1: GPU Fabric Points do not move.
-    "110.4.0+feature.386251.187cf21b.gl",  # Isaac Sim 6.2: streamed GPU Points freeze or lose their colors.
-    "110.4.2+production.394335.109b3db0",  # Isaac Sim 6.3 alpha: the same bugs.
+    "110.3.0+feature.371399.00c488ae",  # Isaac Sim 6.1: a release line without an entry.
+    "110.4.0+feature.386251.187cf21b.gl",  # Isaac Sim 6.2: a patch below the minimum.
+    "110.4.2+production.394335.109b3db0",  # Isaac Sim 6.3 alpha: a build below the minimum.
     "110.4.2-rc.1+production.394335.109b3db0",  # A pre-release tag must not fail the parse.
-    "111.1.0+main.1.0000000",  # A release line whose first builds do not have the fix.
-    f"{_major}.{_minor}.{_patch}+production.{_number}x.0000000",  # A build token must be a complete number.
+    "111.1.0+main.1.0000000",  # A newer release line without an entry.
+    "110.4.2+production.396646x.0000000",  # A build token must be a complete number.
 )
-"""Results of ``omni.kit.app.get_app().get_build_version()`` that are not a Kit build with the GPU Points fix."""
+"""Results of ``omni.kit.app.get_app().get_build_version()`` that :data:`_MIN_KIT_BUILDS` rejects."""
 
 
 def _forbid_point_readback():
