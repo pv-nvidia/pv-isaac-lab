@@ -41,7 +41,6 @@ from isaaclab_physx.renderers.fabric import (
     MIN_GPU_POINTS_KIT_BUILDS,
     FabricBackend,
     FabricBackendCfg,
-    supports_gpu_points,
 )
 from isaaclab_physx.sim.schemas import PhysxRigidBodyCfg
 from isaaclab_visualizers.kit import KitBackendCfg
@@ -554,10 +553,9 @@ def test_mpm_particle_writes_and_resets_are_visible_in_rtx(monkeypatch):
     """RTX must render particle writes and resets independently for cloned MPM assets.
 
     The particles are streamed GPU Fabric Points, Kit's default. One particle per asset with a
-    constant color is the case that older Kit builds freeze or discolor (OMPE-106051).
+    constant color is the case that older Kit builds freeze or discolor (OMPE-106051). On a Kit
+    build without the fix, this test fails with the error of the Fabric resource.
     """
-    if not supports_gpu_points():
-        pytest.skip("The running Kit does not render GPU Fabric Points (OMPE-106051)")
 
     @configclass
     class ParticleSceneCfg(InteractiveSceneCfg):

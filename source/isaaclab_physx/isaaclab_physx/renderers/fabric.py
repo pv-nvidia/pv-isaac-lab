@@ -50,13 +50,6 @@ def _renders_gpu_points(build_version: str) -> bool:
     return minimum is not None and (patch, number) >= minimum
 
 
-def supports_gpu_points() -> bool:
-    """Return whether the running Kit renders GPU Fabric ``Points`` (see :data:`MIN_GPU_POINTS_KIT_BUILDS`)."""
-    import omni.kit.app  # noqa: PLC0415 - requires the active Kit runtime
-
-    return _renders_gpu_points(omni.kit.app.get_app().get_build_version())
-
-
 @wp.kernel(enable_backward=False)
 def _capture_scales(
     matrices: wp.fabricarray(dtype=wp.mat44d),

@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pytest
 import torch
 import warp as wp
 from golden_image import camera_output_image, compare_to_golden
@@ -59,12 +58,6 @@ def run_rendering_case(
     artifact_namespace: str | None = None,
 ) -> None:
     """Capture the declared scene state and all compatible camera outputs."""
-    if case.scene == "mpm" and case.renderer == "isaac_rtx":
-        # The Fabric module needs the Kit runtime, and the kitless suite imports this runner too.
-        from isaaclab_physx.renderers.fabric import supports_gpu_points
-
-        if not supports_gpu_points():
-            pytest.skip("The running Kit does not render GPU Fabric Points (OMPE-106051)")
     configure_seed(42, torch_deterministic=True)
     scene = make_rendering_scene_spec(case.scene, case.physics)
     scene.cfg.camera.renderer_cfg = {
