@@ -30,7 +30,7 @@ from isaaclab.cloner import ReplicateContext
 from isaaclab.markers.vis_marker_registry import VisMarkerRegistry
 from isaaclab.physics import PhysicsCfg
 from isaaclab.sim import SimulationCfg
-from isaaclab.sim.simulation_context import SimulationContext
+from isaaclab.sim.simulation_context import SimulationContext, UnsupportedSceneError
 from isaaclab.visualizers import WindowCfg
 from isaaclab.visualizers.base_visualizer import BaseVisualizer
 from isaaclab.visualizers.visualizer_cfg import (
@@ -206,6 +206,23 @@ def test_update_visualizers_removes_closed_nonrunning_and_failed(caplog):
     assert paused_viz.step_calls == [0.0]
     assert healthy_viz.step_calls == [0.1]
     assert any("Error stepping visualizer" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("training_paused", [False, True])
+def test_visualizer_step_does_not_catch_an_unsupported_scene_error(training_paused):
+    """A scene that the runtime cannot render must stop the simulation, and not only close a visualizer."""
+    viz = _FakeVisualizer(training_paused_steps=1 if training_paused else 0)
+    viz.step = Mock(side_effect=UnsupportedSceneError("The runtime cannot render the scene."))
+    ctx = _make_context([viz], provider=_FakeProvider())
+
+    with pytest.raises(UnsupportedSceneError):
+        if training_paused:
+            ctx.step(render=False)
+        else:
+            ctx.update_visualizers(0.1)
+
+    assert ctx._visualizers == [viz]
+    assert viz.close_calls == 0
 
 
 def test_is_running_until_the_last_visualizer_closes():

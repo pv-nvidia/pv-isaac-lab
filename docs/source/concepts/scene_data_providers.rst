@@ -145,15 +145,15 @@ there. No setting selects a CPU destination for ``Points``.
 
 ``isaaclab_physx.renderers.fabric.MIN_GPU_POINTS_KIT_BUILDS`` lists the first Kit build of
 each release line that renders streamed GPU Fabric ``Points`` correctly (OMPE-106051). With an
-older build, the Fabric resource raises a ``RuntimeError`` when it binds a ``Points``
-destination on a CUDA device. A release line that is not in the list gives the same error.
-The error names the running Kit build and the listed builds, and the stage stays unchanged.
+older build, the Fabric resource raises an :class:`~isaaclab.sim.UnsupportedSceneError` when it
+binds a ``Points`` destination on a CUDA device. A release line that is not in the list gives
+the same error. The error names the running Kit build and the listed builds, and the stage stays
+unchanged.
 
-An Isaac RTX camera raises this error at its first render or eager sensor update. A Kit
-visualizer raises it from ``render_rgb_array()``. A step of a Kit visualizer does not raise it:
-``SimulationContext`` logs the error and closes that visualizer, and the simulation continues.
-If no other visualizer is open, ``SimulationContext.is_running()`` then returns ``False``, and
-a loop on it ends.
+The error is a ``RuntimeError`` subclass. An Isaac RTX camera raises it at its first render or
+eager sensor update. A Kit visualizer with a window raises it at its first step, and a headless
+Kit visualizer raises it from ``render_rgb_array()``. ``SimulationContext`` logs other errors of
+a visualizer step and closes that visualizer, but it does not catch this error.
 
 Particle-only scenes skip GPU hierarchy propagation and its host waits, because the producer
 publishes no rigid transforms. Scenes with rigid bodies retain hierarchy synchronization, and

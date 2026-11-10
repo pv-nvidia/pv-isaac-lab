@@ -19,6 +19,7 @@ isaaclab.sim
     SimulationContext
     SimulationCfg
     BackendCfg
+    UnsupportedSceneError
 
   .. rubric:: Functions
 
@@ -31,6 +32,9 @@ Simulation Context
 
 .. autoclass:: SimulationContext
   :members:
+  :show-inheritance:
+
+.. autoclass:: UnsupportedSceneError
   :show-inheritance:
 
 Simulation Configuration

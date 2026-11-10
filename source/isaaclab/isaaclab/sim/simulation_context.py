@@ -51,6 +51,15 @@ from .spawners import DomeLightCfg, GroundPlaneCfg
 logger = logging.getLogger(__name__)
 
 
+class UnsupportedSceneError(RuntimeError):
+    """Raised when the active runtime cannot simulate or render the scene, and no fallback exists.
+
+    An example is a Kit build that does not render GPU Fabric ``Points`` correctly. A visualizer step
+    of :class:`SimulationContext` logs other errors and closes that visualizer. It does not catch this
+    error, so the error stops the simulation.
+    """
+
+
 class SimulationContext:
     """Controls simulation lifecycle including physics stepping and rendering.
 
@@ -596,6 +605,8 @@ class SimulationContext:
             try:
                 while viz.is_training_paused() and viz.is_running():
                     viz.step(0.0)
+            except UnsupportedSceneError:
+                raise
             except Exception as exc:
                 logger.error("Error stepping visualizer '%s': %s", type(viz).__name__, exc)
                 visualizers_to_remove.append(viz)
@@ -685,6 +696,9 @@ class SimulationContext:
                     viz.step(0.0)
                     continue
                 viz.step(dt)
+            except UnsupportedSceneError:
+                # A closed visualizer must not hide a scene that the runtime cannot render.
+                raise
             except Exception as exc:
                 logger.error("Error stepping visualizer '%s': %s", type(viz).__name__, exc)
                 visualizers_to_remove.append(viz)

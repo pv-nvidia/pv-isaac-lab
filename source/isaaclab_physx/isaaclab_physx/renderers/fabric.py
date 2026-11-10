@@ -17,7 +17,7 @@ import usdrt.hierarchy
 from pxr import Usd, UsdGeom, UsdUtils
 
 from isaaclab.scene_data import SceneDataFormat, SceneDataProvider
-from isaaclab.sim import BackendCfg
+from isaaclab.sim import BackendCfg, UnsupportedSceneError
 from isaaclab.utils import configclass
 from isaaclab.utils.buffers import TimestampedBuffer
 
@@ -214,7 +214,7 @@ class FabricBackend:
                     f"{major}.{minor}.{patch} build {number}"
                     for (major, minor), (patch, number) in MIN_GPU_POINTS_KIT_BUILDS.items()
                 )
-                raise RuntimeError(
+                raise UnsupportedSceneError(
                     f"Kit {build} does not render GPU Fabric Points correctly (OMPE-106051). The first Kit build"
                     f" with the fix, for each supported release line: {minimums or 'none yet'}. CUDA particle"
                     f" positions are never copied to the CPU for rendering, so {len(cuda_points)} Points prim(s)"

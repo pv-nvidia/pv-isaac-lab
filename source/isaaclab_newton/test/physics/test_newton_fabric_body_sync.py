@@ -54,7 +54,7 @@ from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.scene_data import SceneDataFormat, SceneDataProvider
 from isaaclab.sensors import CameraCfg
-from isaaclab.sim import SimulationCfg, build_simulation_context
+from isaaclab.sim import SimulationCfg, UnsupportedSceneError, build_simulation_context
 from isaaclab.sim.spawners.materials import CableMaterialCfg
 from isaaclab.sim.spawners.shapes import CableCfg
 from isaaclab.utils import configclass, replace
@@ -489,7 +489,8 @@ def test_fabric_geometry_sink_uses_sdp_world_points_and_frame_cadence(monkeypatc
             if case == "cuda":
                 for build in _UNSUPPORTED_KIT_BUILDS:
                     app.get_build_version.return_value = build
-                    with pytest.raises(RuntimeError, match="does not render GPU Fabric Points"):
+                    # A visualizer step of the simulation does not catch this error class.
+                    with pytest.raises(UnsupportedSceneError, match="does not render GPU Fabric Points"):
                         fabric.update_geometries(provider, 0)
                 # A rejected bind must leave the authored transforms of every destination in place.
                 for path in points:
