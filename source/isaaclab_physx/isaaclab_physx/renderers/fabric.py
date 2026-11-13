@@ -111,13 +111,7 @@ class FabricBackend:
             self.transforms.matrices = wp.fabricarray(self._write_selection, "omni:fabric:localMatrix")
         provider.get_transforms(self.transforms, self._mapping, scales=self._scales)
         timestamp = provider.backend.transforms_timestamp
-        # World-space particle geometry has no rigid transforms to propagate. Keep
-        # native Fabric refreshes above, but avoid fencing an empty foreign hierarchy.
-        if (
-            self._selection is not None
-            and provider.transform_count
-            and (changed or self._transforms_timestamp != timestamp)
-        ):
+        if self._selection is not None and (changed or self._transforms_timestamp != timestamp):
             self._write_selection.PrepareForReuse()
             device = self._scales.device
             wp.synchronize_stream(device)

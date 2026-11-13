@@ -147,10 +147,6 @@ Kit builds without the GPU ``Points`` fix (OMPE-106051) render these points inco
 with one point can stay frozen, and a cloud can lose its ``displayColor``. Use the Isaac Sim
 version that Isaac Lab pins, because no CPU fallback exists for such a build.
 
-Particle-only scenes skip GPU hierarchy propagation and its host waits, because the producer
-publishes no rigid transforms. Scenes with rigid bodies retain hierarchy synchronization, and
-native rendering or solver metadata can still require host transfers or waits.
-
 Newton backend
 --------------
 
