@@ -683,11 +683,13 @@ def _frame_scene(frame_path: str, translation, device: str = "cuda:0"):
 
 
 def _forbid_point_readback():
-    """Return a ``wp.copy`` replacement that fails on any device-to-host copy."""
+    """Return a ``wp.copy`` replacement that fails on a device-to-host copy of points."""
     copy = wp.copy
 
     def copy_without_point_readback(dest, src, *args, **kwargs):
-        assert not (src.device.is_cuda and dest.device.is_cpu), "The particle update copied CUDA data to the CPU"
+        # Fabric index reads are int32 and legitimate. Only a position payload is a readback.
+        is_readback = src.dtype is wp.vec3f and src.device.is_cuda and dest.device.is_cpu
+        assert not is_readback, "The particle update copied CUDA data to the CPU"
         return copy(dest, src, *args, **kwargs)
 
     return copy_without_point_readback

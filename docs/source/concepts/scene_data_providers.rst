@@ -144,8 +144,8 @@ CUDA device, SDP writes the particle positions into GPU Fabric, and Kit RTX read
 there. No setting selects a CPU destination for ``Points``.
 
 Kit builds without the GPU ``Points`` fix (OMPE-106051) render these points incorrectly. A cloud
-with one point can stay frozen, and a cloud can lose its ``displayColor``. Use the Isaac Sim
-version that Isaac Lab pins, because no CPU fallback exists for such a build.
+with one point can stay frozen, and a cloud can lose its ``displayColor``. Use an Isaac Sim
+version whose Kit contains the fix, because no CPU fallback exists for such a build.
 
 Newton backend
 --------------
