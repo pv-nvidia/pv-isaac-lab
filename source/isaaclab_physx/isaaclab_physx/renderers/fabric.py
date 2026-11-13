@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import field
 
 import warp as wp
@@ -17,35 +16,9 @@ import usdrt.hierarchy
 from pxr import Usd, UsdGeom, UsdUtils
 
 from isaaclab.scene_data import SceneDataFormat, SceneDataProvider
-from isaaclab.sim import BackendCfg, UnsupportedSceneError
+from isaaclab.sim import BackendCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.buffers import TimestampedBuffer
-
-MIN_GPU_POINTS_KIT_BUILDS: dict[tuple[int, int], tuple[int, int]] = {}
-"""First Kit ``(patch, build)`` of each ``(major, minor)`` release line that renders GPU Fabric ``Points``.
-
-Earlier builds freeze a one-point prim with a constant ``displayColor``, or lose the particle colors
-when the GPU positions exist before the first render (OMPE-106051, Kit MR 50394). Kit 110.3 never
-moves GPU points. A release line without an entry has no build with the fix, so each line needs
-its own entry. The table is empty, because no Kit build has the fix yet. An entry such as
-``(110, 4): (2, 400000)`` accepts Kit 110.4.2 from build 400000, and each later 110.4 patch.
-"""
-
-
-def _renders_gpu_points(build_version: str) -> bool:
-    """Return whether a Kit build renders GPU Fabric ``Points`` (see :data:`MIN_GPU_POINTS_KIT_BUILDS`).
-
-    Args:
-        build_version: The result of ``get_build_version()``, in the form
-            ``major.minor.patch[-tag]+branch.build.hash``. An example is
-            ``110.4.2+production.394335.109b3db0``. A string of another form is not a build with the fix.
-    """
-    match = re.match(r"(\d+)\.(\d+)\.(\d+)[^+]*\+[^.]*\.(\d+)(?:\.|$)", build_version)
-    if match is None:
-        return False
-    major, minor, patch, number = map(int, match.groups())
-    minimum = MIN_GPU_POINTS_KIT_BUILDS.get((major, minor))
-    return minimum is not None and (patch, number) >= minimum
 
 
 @wp.kernel(enable_backward=False)
@@ -187,44 +160,23 @@ class FabricBackend:
 
     def _bind_geometries(self, provider: SceneDataProvider, paths: tuple[str, ...]) -> None:
         """Bind declared destinations by device and cadence; SDP owns all data movement."""
+        # Foreign physics publishes world points. Author the sink once so Kit's USD refresh agrees.
         groups = {}
-        cuda_points = []
         for path in paths:
-            prim = self.usd_stage.GetPrimAtPath(path)
-            prim_type = prim.GetTypeName()
+            geometry = UsdGeom.Xformable(self.usd_stage.GetPrimAtPath(path))
+            geometry.ClearXformOpOrder()
+            geometry.SetResetXformStack(True)
+            prim_type = geometry.GetPrim().GetTypeName()
             if prim_type == "Mesh":
                 device, frequency = self.device, 1
             elif prim_type in {"BasisCurves", "Points"}:
                 # Points stay on the simulation device, so a CUDA particle cloud never stages
                 # through the host. RTX Hydra reads curve points from CPU Fabric (NVBug 6502662).
                 device = self.device if prim_type == "Points" else "cpu"
-                frequency = prim.GetAttribute("isaaclab:pointsUpdateFrequency").Get() or 1
-                if prim_type == "Points" and wp.get_device(device).is_cuda:
-                    cuda_points.append(path)
+                frequency = geometry.GetPrim().GetAttribute("isaaclab:pointsUpdateFrequency").Get() or 1
             else:
                 raise TypeError(f"Unsupported Fabric point destination {path}: {prim_type}.")
             groups.setdefault((device, frequency), []).append(path)
-        # Reject the scene before the stage is authored, so that a failed bind leaves it unchanged.
-        if cuda_points:
-            import omni.kit.app  # noqa: PLC0415 - requires the active Kit runtime
-
-            build = omni.kit.app.get_app().get_build_version()
-            if not _renders_gpu_points(build):
-                minimums = ", ".join(
-                    f"{major}.{minor}.{patch} build {number}"
-                    for (major, minor), (patch, number) in MIN_GPU_POINTS_KIT_BUILDS.items()
-                )
-                raise UnsupportedSceneError(
-                    f"Kit {build} does not render GPU Fabric Points correctly (OMPE-106051). The first Kit build"
-                    f" with the fix, for each supported release line: {minimums or 'none yet'}. CUDA particle"
-                    f" positions are never copied to the CPU for rendering, so {len(cuda_points)} Points prim(s)"
-                    f" such as {cuda_points[0]} cannot be rendered with this Kit."
-                )
-        # Foreign physics publishes world points. Author the sink once so Kit's USD refresh agrees.
-        for path in paths:
-            geometry = UsdGeom.Xformable(self.usd_stage.GetPrimAtPath(path))
-            geometry.ClearXformOpOrder()
-            geometry.SetResetXformStack(True)
         self.stage.SynchronizeToFabric()
         self._geometry_bindings = []
         for index, (group, group_paths) in enumerate(groups.items()):

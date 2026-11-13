@@ -54,7 +54,7 @@ from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.scene_data import SceneDataFormat, SceneDataProvider
 from isaaclab.sensors import CameraCfg
-from isaaclab.sim import SimulationCfg, UnsupportedSceneError, build_simulation_context
+from isaaclab.sim import SimulationCfg, build_simulation_context
 from isaaclab.sim.spawners.materials import CableMaterialCfg
 from isaaclab.sim.spawners.shapes import CableCfg
 from isaaclab.utils import configclass, replace
@@ -438,23 +438,17 @@ def test_nested_articulation_follows_root_pose_writes():
 
 @pytest.mark.isaacsim_ci
 @pytest.mark.skipif(not wp.get_cuda_device_count(), reason="CUDA is unavailable")
-@pytest.mark.parametrize("case", ["cuda", "cpu-device", "no-points"])
-def test_fabric_geometry_sink_uses_sdp_world_points_and_frame_cadence(monkeypatch, case):
+def test_fabric_geometry_sink_uses_sdp_world_points_and_frame_cadence(monkeypatch):
     """Mesh, curve and cloud sinks consume only named SDP buffers, independent of Newton internals.
 
-    A CUDA cloud is bound to GPU Fabric and never copied to the host. Kit builds without the GPU
-    Points fix raise instead of selecting the CPU path, and leave the stage unchanged. A CPU
-    simulation device and a scene without ``Points`` prims bind on those Kit builds too.
+    A CUDA cloud is bound to GPU Fabric and never copied to the host.
     """
-    app = Mock(wraps=simulation_app)
-    device = "cpu" if case == "cpu-device" else "cuda:0"
-    cfg = SimulationCfg(device=device, physics=NewtonCfg(), visualizer_cfgs=[])
+    cfg = SimulationCfg(device="cuda:0", physics=NewtonCfg(), visualizer_cfgs=[])
     with build_simulation_context(sim_cfg=cfg) as sim:
         parent = UsdGeom.Xform.Define(sim.stage, "/World/Geometry")
         parent.AddTranslateOp().Set(UsdGf.Vec3d(10.0, 20.0, 30.0))
         points = {}
-        schemas = [(UsdGeom.Mesh, "Mesh"), (UsdGeom.BasisCurves, "Curve"), (UsdGeom.Points, "Cloud")]
-        for schema, name in schemas[: 2 if case == "no-points" else 3]:
+        for schema, name in ((UsdGeom.Mesh, "Mesh"), (UsdGeom.BasisCurves, "Curve"), (UsdGeom.Points, "Cloud")):
             path = f"/World/Geometry/{name}"
             geometry = schema.Define(sim.stage, path)
             geometry.CreatePointsAttr([(0.0, 0.0, 0.0)] * 3)
@@ -482,29 +476,13 @@ def test_fabric_geometry_sink_uses_sdp_world_points_and_frame_cadence(monkeypatc
             )
         )
         fabric = sim.get_or_create_backend(FabricBackendCfg(stage=sim.stage, device=sim.device))
-        # The Kit build is checked when the destinations are bound, and only for CUDA Points.
-        with monkeypatch.context() as patch:
-            patch.setattr(omni.kit.app, "get_app", lambda: app)
-            patch.setattr("isaaclab_physx.renderers.fabric.MIN_GPU_POINTS_KIT_BUILDS", _MIN_KIT_BUILDS)
-            if case == "cuda":
-                for build in _UNSUPPORTED_KIT_BUILDS:
-                    app.get_build_version.return_value = build
-                    # A visualizer step of the simulation does not catch this error class.
-                    with pytest.raises(UnsupportedSceneError, match="does not render GPU Fabric Points"):
-                        fabric.update_geometries(provider, 0)
-                # A rejected bind must leave the authored transforms of every destination in place.
-                for path in points:
-                    assert not UsdGeom.Xformable(sim.stage.GetPrimAtPath(path)).GetResetXformStack(), path
-            app.get_build_version.return_value = _SUPPORTED_KIT_BUILD if case == "cuda" else _UNSUPPORTED_KIT_BUILDS[0]
-            fabric.update_geometries(provider, 0)
+        fabric.update_geometries(provider, 0)
         simulation_app.update()
         wp.synchronize_device(sim.device)
         for path in points:
             np.testing.assert_allclose(
                 _fabric_curve_points_world(path), points[path].numpy(), atol=1.0e-6, err_msg=path
             )
-        if case != "cuda":
-            return  # The checks below do not depend on the Kit build.
         # Kit's first update can add prims; settle those structural changes before checking cadence.
         fabric.update_geometries(provider, 0)
 
@@ -551,9 +529,9 @@ def test_fabric_geometry_sink_uses_sdp_world_points_and_frame_cadence(monkeypatc
 def test_mpm_particle_writes_and_resets_are_visible_in_rtx(monkeypatch):
     """RTX must render particle writes and resets independently for cloned MPM assets.
 
-    The particles are streamed GPU Fabric Points, Kit's default. One particle per asset with a
-    constant color is the case that older Kit builds freeze or discolor (OMPE-106051). On a Kit
-    build without the fix, this test fails with the error of the Fabric resource.
+    The particles are GPU Fabric Points. One particle per asset with a constant color is the
+    case that Kit builds without the GPU Points fix freeze or discolor (OMPE-106051), so this
+    test fails on such a build.
     """
 
     @configclass
@@ -710,24 +688,6 @@ def _frame_scene(frame_path: str, translation, device: str = "cuda:0"):
             yield sim, scene, view
         finally:
             sim.register_interactive_scene(None)
-
-
-_MIN_KIT_BUILDS = {(110, 4): (2, 396646)}
-"""A ``MIN_GPU_POINTS_KIT_BUILDS`` table for the test, which must not depend on the released entries."""
-
-_SUPPORTED_KIT_BUILD = "110.4.2+production.396646.0000000"
-"""The first Kit build that :data:`_MIN_KIT_BUILDS` accepts."""
-
-_UNSUPPORTED_KIT_BUILDS = (
-    "110.3.0+feature.371399.00c488ae",  # Isaac Sim 6.1: a release line without an entry.
-    "110.4.0+feature.386251.187cf21b.gl",  # Isaac Sim 6.2: a patch below the minimum.
-    "110.4.1+production.400000.0000000",  # A patch below the minimum, with a build number above it.
-    "110.4.2+production.394335.109b3db0",  # Isaac Sim 6.3 alpha: a build below the minimum.
-    "110.4.2-rc.1+production.394335.109b3db0",  # A pre-release tag must not fail the parse.
-    "111.1.0+main.1.0000000",  # A newer release line without an entry.
-    "110.4.2+production.396646x.0000000",  # A build token must be a complete number.
-)
-"""Results of ``omni.kit.app.get_app().get_build_version()`` that :data:`_MIN_KIT_BUILDS` rejects."""
 
 
 def _forbid_point_readback():

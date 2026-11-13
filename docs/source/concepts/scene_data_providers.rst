@@ -143,17 +143,9 @@ only, not bindings or engine handles.
 CUDA device, SDP writes the particle positions into GPU Fabric, and Kit RTX reads them from
 there. No setting selects a CPU destination for ``Points``.
 
-``isaaclab_physx.renderers.fabric.MIN_GPU_POINTS_KIT_BUILDS`` lists the first Kit build of
-each release line that renders streamed GPU Fabric ``Points`` correctly (OMPE-106051). With an
-older build, the Fabric resource raises an :class:`~isaaclab.sim.UnsupportedSceneError` when it
-binds a ``Points`` destination on a CUDA device. A release line that is not in the list gives
-the same error. The error names the running Kit build and the listed builds, and the stage stays
-unchanged.
-
-The error is a ``RuntimeError`` subclass. An Isaac RTX camera raises it at its first render or
-eager sensor update. A Kit visualizer with a window raises it at its first step, and a headless
-Kit visualizer raises it from ``render_rgb_array()``. ``SimulationContext`` logs other errors of
-a visualizer step and closes that visualizer, but it does not catch this error.
+Kit builds without the GPU ``Points`` fix (OMPE-106051) render these points incorrectly. A cloud
+with one point can stay frozen, and a cloud can lose its ``displayColor``. Use the Isaac Sim
+version that Isaac Lab pins, because no CPU fallback exists for such a build.
 
 Particle-only scenes skip GPU hierarchy propagation and its host waits, because the producer
 publishes no rigid transforms. Scenes with rigid bodies retain hierarchy synchronization, and

@@ -6,7 +6,6 @@
 __all__ = [
     "SimulationCfg",
     "SimulationContext",
-    "UnsupportedSceneError",
     "build_simulation_context",
     "AssetConverterBase",
     "AssetConverterBaseCfg",
@@ -316,7 +315,7 @@ from .schemas import (
     modify_spatial_tendon_properties,
 )
 from .simulation_cfg import BackendCfg, SimulationCfg
-from .simulation_context import SimulationContext, UnsupportedSceneError, build_simulation_context
+from .simulation_context import SimulationContext, build_simulation_context
 
 # Forwarded to isaaclab_newton.sim.schemas via __getattr__ shim
 MujocoJointDrivePropertiesCfg = ...

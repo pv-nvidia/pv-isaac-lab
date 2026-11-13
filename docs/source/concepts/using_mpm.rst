@@ -119,10 +119,8 @@ callback or particle override is required:
 .. note::
 
    On a CUDA simulation device, Kit RTX reads the MPM particle positions from GPU Fabric. This
-   path needs a Kit build with the GPU ``Points`` fix. With an older build, the first render of
-   an Isaac RTX camera or of the Kit visualizer raises an
-   :class:`~isaaclab.sim.UnsupportedSceneError`. :doc:`scene_data_providers` names the list of
-   the supported Kit builds.
+   path needs a Kit build with the GPU ``Points`` fix. An older build can render a particle cloud
+   frozen or without its color. See :doc:`scene_data_providers`.
 
 
 Coupling with rigid bodies
