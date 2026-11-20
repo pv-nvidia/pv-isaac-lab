@@ -376,9 +376,9 @@ products. Each render product has its own, smaller atlas, so a smaller value can
 below the limit. The output shapes and the environment order do not change: each data type still has
 one ``(num_envs, height, width, channels)`` buffer. The field accepts these values:
 
-* ``"auto"`` (the default): The sensor starts with one render product. If its first frame fails, the
-  OVRTX renderer searches for a split. The search halves the number of environments per render
-  product and renders the frame again.
+* ``"auto"`` (the default): The sensor starts with one render product. If its first frame fails
+  because a buffer of the sensor is above the limit, the OVRTX renderer computes a split from the
+  error and renders the frame again.
 * ``"all"``: The sensor always has one render product.
 * An integer ``M`` of at least 1: The sensor always has ``ceil(num_envs / M)`` render products. For
   example, 5 environments with ``M = 2`` give render products of 2, 2 and 1 environments. Only the
@@ -396,15 +396,29 @@ When a smaller layout renders, a warning gives the integer that skips this searc
        camera_cfg, render_settings={"omni:rtx:rtpt:spp": ("Int", 16)}, max_envs_per_render_product=1280
    )
 
-With several sensors, each failed frame halves the environments per render product of one sensor.
-The search takes the sensor with the most atlas pixels times samples per pixel. This sensor did not
-necessarily cause the failure, so the search can also split a sensor that renders with one render
-product.
+The error of a failed frame names each render product with a buffer above the limit, and it gives
+the bytes that the buffer needs. From these bytes, the renderer computes the fewest render products
+that keep the buffer below the limit. With several sensors, one failed frame splits each sensor that
+the error names, and the other sensors keep their layout.
 
-The search has limits. One frame tries at most four smaller layouts, counted over all camera
-sensors. If the frame still fails, the renderer error reaches the caller, and an ``"auto"`` sensor
-without a rendered frame renders no more frames. During the search, the renderer can need more GPU
-memory, because the failed layouts stay in the scene until the sensor is cleaned up.
+DLSS can render a smaller atlas at a larger render scale, so the smaller render products can fail
+again. The renderer then computes the next split for the full resolution, because a render scale
+above 1 is not expected. If one camera does not fit at the full resolution, the next split has one
+environment per render product.
+
+The search stops in these cases, and the renderer error reaches the caller with a note:
+
+* The error names no render product above the limit, for example when the GPU runs out of memory.
+* The error names a sensor with ``"all"`` or an integer. The note gives an integer that can keep
+  the render products of this sensor below the limit.
+* The error names an ``"auto"`` sensor without one camera path per environment.
+* One camera alone needs a buffer above the limit. Lower the resolution or the samples per pixel.
+* The smaller render products render fewer pixels, but their buffer did not get smaller.
+* The frame already failed with two smaller layouts.
+
+An ``"auto"`` sensor without a rendered frame then renders no more frames. During the search, the
+renderer can need more GPU memory, because the failed layouts stay in the scene until the sensor is
+cleaned up.
 
 Set ``"all"`` or an integer to turn the search off for a sensor. The layout then does not depend on
 the GPU, the driver or the renderer version. Path tracing and DLSS depend on the pixel position in

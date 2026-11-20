@@ -113,10 +113,10 @@ class CameraCfg(SensorBaseCfg):
     output shapes and the environment order do not change. Path tracing and DLSS depend on the pixel position in
     the atlas, so the color outputs can differ a little.
 
-    - ``"auto"``: The sensor starts with one render product. If its first frame fails, the OVRTX renderer
-      searches for a split. If a smaller layout renders, a warning gives the integer that skips this search.
-    - ``"all"``: The sensor always has one render product. A failed frame raises the renderer error, unless
-      the search can halve another ``"auto"`` sensor and the frame then renders.
+    - ``"auto"``: The sensor starts with one render product. If its first frame fails because a buffer of the
+      sensor is above the limit, the OVRTX renderer computes a split from the error. If the split renders, a
+      warning gives the integer that skips this search.
+    - ``"all"``: The sensor always has one render product. A buffer above the limit raises the renderer error.
     - An integer ``M`` of at least 1: The sensor always has ``ceil(num_envs / M)`` render products.
 
     Only renderers that set :attr:`~isaaclab.renderers.RendererCfg.supports_render_product_split` accept an

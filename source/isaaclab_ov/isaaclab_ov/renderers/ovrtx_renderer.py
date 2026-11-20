@@ -34,6 +34,7 @@ import weakref
 from builtins import ExceptionGroup
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from fractions import Fraction
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
@@ -60,6 +61,7 @@ from ovrtx import (
     PrimMode,
     Renderer,
     RendererConfig,
+    RenderFailedError,
     RenderProductSetOutputs,
     Semantic,
     TextureStreamingMode,
@@ -109,7 +111,7 @@ from isaaclab_ov.stage import (
 
 if TYPE_CHECKING:
     from isaaclab_ppisp import PpispPipeline
-    from ovrtx import AttributeBinding, FrameOutput, Operation, PendingFetch, RenderVarOutput
+    from ovrtx import AttributeBinding, FrameOutput, Operation, PendingFetch, RenderProductFailure, RenderVarOutput
 
     from isaaclab.renderers.base_renderer import VisualMaterialBatch
 
@@ -118,8 +120,7 @@ if TYPE_CHECKING:
 from isaaclab.renderers.camera_render_spec import CameraRenderSpec
 
 _RENDER_DELTA_TIME = 1.0 / 60.0
-_FAILED_FRAME_ERROR_TEXT = "failed to produce a frame"
-_MAX_SMALLER_LAYOUTS = 4
+_MAX_SMALLER_LAYOUTS = 2
 _GPU_CAMERA_TRANSFORMS_ATTRIBUTE = "omni:rtx:scene:hydra:readGPUCameraTransformsFromFabricInRenderDelegate"
 _LDR_COLOR_VAR = "LdrColor"
 _CAMERA_INTRINSIC_ATTRIBUTES = (
@@ -327,14 +328,38 @@ class OVRTXBackend:
             self.attached = False
 
 
-def _split_priority(data: OVRTXCameraRenderData) -> int:
-    """Return the pixels of the first and largest atlas of a camera sensor times its samples per pixel.
+def _storage_buffer_failures(
+    error: RenderFailedError, cameras: Iterable[OVRTXCameraRenderData]
+) -> dict[OVRTXCameraRenderData, list[tuple[OVRTXRenderProduct, RenderProductFailure]]]:
+    """Return the storage-buffer limit failures of ``error`` for each camera sensor, with the render product they name.
 
-    The largest path tracer buffer grows with both, so the split search halves the sensor with the highest value first.
+    A failure that names no current render product of ``cameras`` is left out, for example one of an older layout.
     """
-    product = data.products[0]
-    spp = int(data.spec.cfg.render_settings.get("omni:rtx:rtpt:spp", ("Int", 1))[1])
-    return product.num_cols * data.width * product.num_rows * data.height * spp
+    products = {product.path: (data, product) for data in cameras for product in data.products}
+    failures = {}
+    for failure in error.render_product_failures:
+        if failure.cause == "storage_buffer_limit" and failure.render_product_path in products:
+            data, product = products[failure.render_product_path]
+            failures.setdefault(data, []).append((product, failure))
+    return failures
+
+
+def _tile_cells(num_envs: int) -> int:
+    """Return the number of cells in the tile grid of ``num_envs`` environments, also the empty ones."""
+    cols = _tile_columns(num_envs)
+    return cols * math.ceil(num_envs / cols)
+
+
+def _envs_per_render_product(num_envs: int, max_cells: int) -> int:
+    """Return the environments per render product for tile grids of at most ``max_cells`` cells.
+
+    The result gives the fewest render products whose grids fit. Of the sizes that give this number of render
+    products, it is the smallest. ``max_cells`` must be at least 1.
+    """
+    max_envs = min(max_cells, num_envs)
+    while _tile_cells(max_envs) > max_cells:
+        max_envs -= 1
+    return math.ceil(num_envs / math.ceil(num_envs / max_envs))
 
 
 class OVRTXCameraRenderData:
@@ -361,8 +386,10 @@ class OVRTXCameraRenderData:
         self.num_envs = spec.num_instances
         self.data_types = spec.cfg.data_types
         max_envs = spec.cfg.max_envs_per_render_product
-        # Whether the split search may halve the environments per render product of this sensor.
+        # Whether the split search may change the environments per render product of this sensor.
         self.searches_split = max_envs == "auto" and len(camera_paths) == self.num_envs
+        # The record with the largest buffer in the last failed frame that named this sensor.
+        self.reported_failure: RenderProductFailure | None = None
         # The error of the first frame if the split search gave up on this sensor. Later renders raise at once.
         self.first_frame_error: RuntimeError | None = None
         # "auto" and "all" both start with one render product for all environments.
@@ -1354,9 +1381,8 @@ class OVRTXRenderer(BaseRenderer):
         re-enters the set on a later step far more expensive. Only ``render_data`` is read
         back, so products left out of the request keep their previous outputs.
 
-        If the first frame fails, the split search halves the environments per render product of a camera sensor
-        with ``max_envs_per_render_product = "auto"`` and renders the frame again. A warning then gives the value
-        that skips the search. See :meth:`_replace_failed_layouts`.
+        If the first frame fails, :meth:`_replace_failed_layouts` can split camera sensors with ``"auto"`` and render
+        the frame again. A warning then gives the value that skips the search.
 
         Args:
             render_data: Cameras whose poses and output buffers have been prepared. An empty
@@ -1381,7 +1407,7 @@ class OVRTXRenderer(BaseRenderer):
             try:
                 self._render_batch_once(render_data)
                 break
-            except RuntimeError as error:
+            except RenderFailedError as error:
                 if not self._replace_failed_layouts(error, smaller_layouts):
                     raise
         for data in self.backend.unrendered:
@@ -1395,18 +1421,18 @@ class OVRTXRenderer(BaseRenderer):
                 )
         self.backend.unrendered.clear()
 
-    def _replace_failed_layouts(self, error: RuntimeError, smaller_layouts: int) -> bool:
+    def _replace_failed_layouts(self, error: RenderFailedError, smaller_layouts: int) -> bool:
         """After a failed first frame, move every camera sensor without a rendered frame to new render products.
 
         A failed step fails for every sensor on the engine, and OVRTX can abort when it renders a failed render
-        product again. So each such sensor gets a new scope, and its old render products leave the steps. Of the
-        sensors with ``"auto"``, the one with the highest :func:`_split_priority` gets half as many environments
-        per render product. The others keep their split. The search gives up when no sensor can be halved or
-        after ``_MAX_SMALLER_LAYOUTS`` smaller layouts. A sensor with ``"auto"`` then renders no frames.
+        product again. So each such sensor gets a new scope, and its old render products leave the steps. Each failed
+        layout stays in the scene until the sensor cleanup, so ``_MAX_SMALLER_LAYOUTS`` limits the smaller layouts of
+        one render batch.
 
-        OVRTX reports a failed frame only in its error text. The search starts only when the error contains
-        ``_FAILED_FRAME_ERROR_TEXT``, and any other error reaches the caller. Each failed layout stays in the scene
-        until the sensor cleanup, so ``_MAX_SMALLER_LAYOUTS`` limits the smaller layouts of one render batch.
+        The error names each render product with a buffer above the storage-buffer limit, and only the named sensors
+        get a new split. DLSS can render a smaller atlas at a larger render scale. So the first split assumes the
+        reported scale, and a later split assumes the full resolution. If the search stops, notes on ``error`` give
+        the reason, and a sensor with ``"auto"`` renders no frames.
 
         Args:
             error: Error of the failed step.
@@ -1416,42 +1442,101 @@ class OVRTXRenderer(BaseRenderer):
             ``True`` if the next step uses a smaller layout. ``False`` if the caller must raise ``error``.
         """
         cameras = self.backend.unrendered
-        if _FAILED_FRAME_ERROR_TEXT not in str(error) or not cameras:
+        if not cameras:
             return False
-        candidates = [data for data in cameras if data.searches_split and data.products[0].num_envs > 1]
-        halved = max(candidates, key=_split_priority) if candidates and smaller_layouts < _MAX_SMALLER_LAYOUTS else None
-        if halved is None:
-            if smaller_layouts:
-                error.add_note(
-                    f"The first frame also failed with {smaller_layouts} smaller render product layout(s). The"
-                    " renderer log shows the cause. Smaller render products do not fix a lack of GPU memory."
+        failures = _storage_buffer_failures(error, cameras)
+        envs_per_product: dict[OVRTXCameraRenderData, int] = {}
+        notes = []
+        if not failures:
+            notes.append(
+                "The error names no current render product above the storage-buffer limit, so the split search"
+                " stops. The renderer log shows the cause."
+            )
+        for data, sensor_failures in failures.items():
+            name = f"Camera {data.spec.cfg.prim_path}"
+            # Bytes of one tile cell at the reported render scale. The buffer also covers the empty cells. A smaller
+            # atlas renders at the same or a larger scale, so a cell of a smaller render product needs at least this.
+            cell_bytes = {
+                failure: Fraction(failure.needed_bytes, product.num_cols * product.num_rows)
+                for product, failure in sensor_failures
+            }
+            if any(size > failure.limit_bytes for failure, size in cell_bytes.items()):
+                notes.append(
+                    f"{name}: one camera needs a buffer of at least {math.ceil(max(cell_bytes.values())):,} bytes,"
+                    " above the storage-buffer limit of the GPU. Lower the resolution or the samples per pixel of"
+                    " this camera sensor."
                 )
-            unsearched = [data.spec.cfg for data in cameras if not data.searches_split]
-            if unsearched:
-                values = ", ".join(f"{cfg.prim_path} ({cfg.max_envs_per_render_product!r})" for cfg in unsearched)
-                error.add_note(
-                    "The split search changes only camera sensors with CameraCfg.max_envs_per_render_product="
-                    f'"auto" and one camera path per environment, not {values}. A failed frame can come from a'
-                    ' tiled atlas above a renderer limit. "auto" or a smaller integer can avoid it.'
+                continue
+            largest = max(cell_bytes, key=lambda failure: failure.needed_bytes)
+            previous = data.reported_failure
+            if previous is not None:
+                # DLSS can render a smaller atlas with more pixels, so its buffer can grow. A buffer that did not
+                # shrink with fewer render pixels does not shrink with a split.
+                fewer_pixels = math.prod(largest.render_size) < math.prod(previous.render_size)
+                if fewer_pixels and largest.needed_bytes >= previous.needed_bytes:
+                    notes.append(
+                        f"{name}: its smaller render products render fewer pixels, but they need a buffer of"
+                        f" {largest.needed_bytes:,} bytes, not less than the {previous.needed_bytes:,} bytes of the"
+                        " previous layout. So a split does not make this buffer smaller."
+                    )
+                    continue
+                # Bytes of one tile cell at the full resolution. A render scale above 1 is not expected, so a cell of
+                # a smaller render product needs at most this.
+                cell_bytes = {
+                    failure: Fraction(failure.needed_bytes * data.width * data.height, math.prod(failure.render_size))
+                    for failure in cell_bytes
+                }
+            # At the full resolution, one cell can be above the limit although it fits at its render scale. One
+            # camera per render product is then the last split to try.
+            cells = max(min(failure.limit_bytes // size for failure, size in cell_bytes.items()), 1)
+            envs = _envs_per_render_product(data.num_envs, cells)
+            if data.searches_split:
+                data.reported_failure = largest
+                envs_per_product[data] = envs
+            elif data.spec.cfg.max_envs_per_render_product == "auto":
+                notes.append(
+                    f"{name} has a render product above the storage-buffer limit. The split search needs one camera"
+                    " path per environment, so it cannot split this camera sensor. Lower the resolution or the"
+                    " samples per pixel of this camera sensor."
                 )
+            else:
+                notes.append(
+                    f"{name} ({data.spec.cfg.max_envs_per_render_product!r}) has a render product above the"
+                    ' storage-buffer limit. The split search changes only camera sensors with "auto".'
+                    f' CameraCfg.max_envs_per_render_product="auto" or {envs} can keep its render products below'
+                    " the limit."
+                )
+        if not notes and smaller_layouts >= _MAX_SMALLER_LAYOUTS:
+            notes.append(
+                f"The first frame also failed with {smaller_layouts} smaller render product layouts, the most that"
+                " the split search tries."
+            )
+        elif notes and smaller_layouts:
+            notes.insert(0, f"The first frame also failed with {smaller_layouts} smaller render product layout(s).")
+        if notes and error.unlisted_failure_count:
+            notes.append(
+                f"The error does not list up to {error.unlisted_failure_count} more failures above the storage-buffer"
+                " limit."
+            )
+        for note in notes:
+            error.add_note(note)
         # First remove every failed render product from the set that each step renders. If a scene
         # write below fails, the set then holds no failed render product.
         for data in cameras:
             self.backend.render_products.difference_update(data.render_product_paths)
         for data, renderer in list(cameras.items()):
-            if halved is None and data.searches_split:
+            if notes and data.searches_split:
                 # The search gave up on this sensor. Another step cannot render it, so it leaves the steps
                 # for good, and a later render of it raises at once. Its old scope stays until the cleanup.
                 data.first_frame_error = error
                 cameras.pop(data)
                 continue
-            max_envs = data.products[0].num_envs
             data._set_layout(
-                f"RenderCamera_{renderer.scene.next_camera_id}", math.ceil(max_envs / 2) if data is halved else max_envs
+                f"RenderCamera_{renderer.scene.next_camera_id}", envs_per_product.get(data, data.products[0].num_envs)
             )
             renderer.scene.next_camera_id += 1
             renderer._add_render_products(data)
-        return halved is not None
+        return not notes
 
     def _render_batch_once(self, render_data: Sequence[OVRTXCameraRenderData]) -> None:
         """Render one step with every registered render product, and read back the images of ``render_data``."""
