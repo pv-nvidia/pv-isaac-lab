@@ -796,6 +796,50 @@ def test_ovrtx_render_batch_does_not_search_after_another_error(monkeypatch):
     assert renderer.backend.render_products == set(layout)
 
 
+def _plan_sensor(num_envs: int, searches_split: bool = True, spp: int = 1) -> types.SimpleNamespace:
+    """Stand-in with the fields that the split plan reads. Its atlas is one row of 64 x 64 tiles."""
+    product = types.SimpleNamespace(num_envs=num_envs, num_cols=num_envs, num_rows=1)
+    cfg = types.SimpleNamespace(render_settings={"omni:rtx:rtpt:spp": ("Int", spp)})
+    return types.SimpleNamespace(
+        searches_split=searches_split, products=[product], width=64, height=64, spec=types.SimpleNamespace(cfg=cfg)
+    )
+
+
+def test_ovrtx_split_plan_halves_the_auto_sensor_with_the_largest_buffer():
+    """The plan halves the "auto" sensor with the most atlas pixels times samples per pixel. Others keep their split."""
+    small, large, fixed = _plan_sensor(8, spp=4), _plan_sensor(16), _plan_sensor(64, searches_split=False)
+    error = RuntimeError("OVRTX failed to produce a frame")
+
+    plan = ovrtx_renderer_module._plan_split([small, large, fixed], error, 0)
+
+    assert plan.halved is small
+    assert plan.layouts == ((small, 4), (large, 16), (fixed, 64))
+
+
+@pytest.mark.parametrize(
+    ("num_envs", "num_smaller_layouts"), [(16, "limit"), (1, 0)], ids=["after-the-limit", "one-environment"]
+)
+def test_ovrtx_split_plan_gives_up_on_every_auto_sensor(num_envs, num_smaller_layouts):
+    """Without a sensor to halve, the plan gives up on the "auto" sensors and keeps the split of the others."""
+    if num_smaller_layouts == "limit":
+        num_smaller_layouts = ovrtx_renderer_module._MAX_SMALLER_LAYOUTS
+    auto, fixed = _plan_sensor(num_envs), _plan_sensor(16, searches_split=False)
+
+    plan = ovrtx_renderer_module._plan_split(
+        [auto, fixed], RuntimeError("failed to produce a frame"), num_smaller_layouts
+    )
+
+    assert plan.halved is None
+    assert plan.layouts == ((auto, None), (fixed, 16))
+
+
+def test_ovrtx_split_plan_is_empty_for_another_error():
+    """Only a failed frame starts the search, so another error gives an empty plan."""
+    plan = ovrtx_renderer_module._plan_split([_plan_sensor(16)], RuntimeError("device lost"), 0)
+
+    assert plan == ovrtx_renderer_module._SplitPlan()
+
+
 @pytest.mark.parametrize(
     "sensors, samples, too_large, layouts",
     [
