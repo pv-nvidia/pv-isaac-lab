@@ -22,7 +22,6 @@ import weakref
 from collections.abc import Sequence
 from dataclasses import MISSING
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -263,10 +262,7 @@ class _OvxrPanelRenderData:
         self.camera_paths = list(spec.camera_prim_paths)
         self.width = spec.cfg.width
         self.height = spec.cfg.height
-        # The panel's one render product, with an atlas of one tile.
-        self.products = [
-            SimpleNamespace(path=self.render_product_path, camera_paths=self.camera_paths, num_cols=1, num_rows=1)
-        ]
+        self.num_cols = self.num_rows = 1
         self.camera_xform_binding: ovstage.Query | None = None
         self.camera_transforms = wp.empty(len(self.camera_paths), dtype=wp.mat44d, device=device)
         self.resources = contextlib.ExitStack()
